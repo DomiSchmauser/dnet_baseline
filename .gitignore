@@ -1,0 +1,7 @@
+# Output
+output
+
+# Junk
+.idea
+*__pycache__
+
