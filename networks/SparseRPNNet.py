@@ -10,7 +10,7 @@ import MinkowskiEngine as ME
 class SparseRPNNet4_Res1(nn.Module):
     def __init__(self, conf):
         super().__init__()
-        self.num_features = conf.num_features
+        self.num_features = conf['num_features']
 
 
         self.enc1 = nn.Sequential(

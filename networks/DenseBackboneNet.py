@@ -77,7 +77,7 @@ class DenseBackboneEPN(nn.Module):
 class DenseBackboneEPND2(nn.Module):
     def __init__(self, conf):
         super().__init__()
-        self.num_features = conf.num_features
+        self.num_features = conf['num_features']
 
         self.enc1 = nn.Sequential(
             #nn.ConstantPad3d(padding=(3,3,1,1,1,1),value=1),

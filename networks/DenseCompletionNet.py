@@ -31,7 +31,7 @@ class DenseCompletionDec2Bigger(nn.Module):
     def __init__(self, conf):
         super().__init__()
 
-        self.num_features = conf.num_features
+        self.num_features = conf['num_features']
 
         # (c-1)*s - 2*p + (k-1)+1 +op = (c-1)*s -2*p+k+op 
         self.dec2 = nn.Sequential(

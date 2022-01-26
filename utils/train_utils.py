@@ -191,28 +191,3 @@ def convert_voxel_to_pc(voxel_grid, rot, trans, scale):
 
     return world_pc
 
-'''
-def custom_collate(batch):
-    MAX_SEQ_LEN = 25
-    padded_batch = []
-    for sample in batch:
-        if len(sample) != MAX_SEQ_LEN:
-            missing_entries = MAX_SEQ_LEN - len(sample)
-            for i in range(missing_entries):
-                sample.append(None)
-            padded_batch.append(sample)
-
-        assert len(sample) == MAX_SEQ_LEN
-
-    return padded_batch
-
-def trunc_zeroboxes(gt_boxes, gt_ids):
-
-    At inference detection 3d bounding box is assigned 0 if mask is only few pixels large
-    remove according gt_boxes
-
-
-    idx_sum = torch.sum(gt_boxes, dim=(1, 2))
-    idx = torch.squeeze(idx_sum.nonzero())
-    return gt_boxes[idx, :, :], gt_ids[idx]
-'''

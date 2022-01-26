@@ -380,9 +380,10 @@ class SparseUNetRPN(nn.Module):
 
 
 class PureSparseBackboneCol_Res1(nn.Module):
+
     def __init__(self, conf):
         super().__init__()
-        self.num_features = conf.num_features
+        self.num_features = conf['num_features']
 
         self.enc1 = nn.Sequential(
             #nn.ConstantPad3d(padding=(3,3,1,1,1,1),value=1),
@@ -402,22 +403,6 @@ class PureSparseBackboneCol_Res1(nn.Module):
         x = ME.cat(x_geo,x_col)
         x_e1 = self.enc1(x)
         x_c2 = self.conv2(x_e1, c_out.C)
-        # aaa  = ME.MinkowskiConvolution(self.num_features*2, self.num_features*2, kernel_size=9, stride=1, dimension=3).cuda()
-        # aaa._parameters['kernel'] = nn.Parameter(torch.ones_like(aaa._parameters['kernel'])).cuda()
-        # m = ME.SparseTensor(torch.ones(2,self.num_features*2).cuda(), torch.Tensor([[0,0,16,28], [0,0,20,28]]).cuda(), force_creation=True)
-        if False:
-            m = ME.SparseTensor(torch.ones(2,self.num_features*2).cuda(), torch.Tensor([[0,0,10,28], [0,0,20,28]]).cuda(), force_creation=True)
-            aaa3  = ME.MinkowskiConvolution(self.num_features*2, self.num_features*2, kernel_size=1, stride=1, dimension=3).cuda()
-            aaa3._parameters['kernel'] = nn.Parameter(torch.ones_like(aaa3._parameters['kernel'])).cuda()
-            m2 = aaa3(m)
-            m2.set_tensor_stride([10,10,10])
-            aaa2  = ME.MinkowskiConvolution(self.num_features*2, self.num_features*2, kernel_size=3, stride=1, dimension=3).cuda()
-            aaa2._parameters['kernel'] = nn.Parameter(torch.ones_like(aaa2._parameters['kernel'])).cuda()
-            r1 = aaa2(m2)
-            mp = ME.SparseTensor(m2.F, torch.Tensor([[0,0,10,28], [0,0,20,28]]).cuda(), force_creation=True)
-            mp.set_tensor_stride([10, 10, 10])
-            r2 = aaa2(mp)
-            # r1 == r2
 
         # this should work!
         x_c2.set_tensor_stride([4,4,4])

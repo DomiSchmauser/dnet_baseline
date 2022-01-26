@@ -4,6 +4,7 @@ import sys, os
 import math
 import time, datetime
 import numpy as np
+import pandas as pd
 import json
 import traceback
 
@@ -15,12 +16,22 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from torch.nn import functional as F
 
-
 import networks
 import datasets
 
 sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
+
+from model_cfg import init_cfg
+from utils.train_utils import sec_to_hm_str
+from utils.net_utils import vg_crop
+
+# Model import
+from models.BCompletionDec2 import BCompletionDec2
+from models.BDenseBackboneGeo import BDenseBackboneGeo
+from models.BPureSparseBackbone import BPureSparseBackboneCol
+from models.BSparseRPN_pure import BSparseRPN_pure
+from models.BNocDec2 import BNocDec2
 
 class Trainer:
 
@@ -29,55 +40,62 @@ class Trainer:
         self.log_path = CONF.PATH.OUTPUT
 
         self.models = {}
-        self.parameters_to_train = []
+        self.parameters_rpn = []
+        self.parameters_general = []
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         # Model setup --------------------------------------------------------------------------------------------------
-        '''
-        self.voxel_out_dim = 12
-        self.edge_out_dim = 8
-        self.models["voxel_encoder"] = networks.VoxelEncoder(input_channel=1, output_channel=self.voxel_out_dim)
-        self.models["voxel_encoder"].to(self.device)
+        cfg = init_cfg()
 
-        if not self.opt.no_pose:
-            classifier_in_dim = 2 * self.voxel_out_dim + self.edge_out_dim
-        else:
-            classifier_in_dim = 2 * self.voxel_out_dim
+        # Sparse Backbone & RPN
+        self.models["sparse_backbone"] = networks.PureSparseBackboneCol_Res1(conf=cfg['sparse_backbone'])
+        self.models["sparse_backbone"].to(self.device)
+        self.sparse_backbone = BPureSparseBackboneCol(cfg['sparse_backbone'], self.models['sparse_backbone'])
 
-        self.models["edge_encoder"] = networks.MLP(7, [8, self.edge_out_dim], dropout_p=None, use_batchnorm=False)
-        self.models["edge_encoder"].to(self.device)
+        self.models["rpn"] = networks.SparseRPNNet4_Res1(conf=cfg['rpn'])
+        self.models["rpn"].to(self.device)
+        self.rpn = BSparseRPN_pure(cfg['rpn'], self.models['rpn'])
 
-        self.models["edge_classifier"] = networks.EdgeClassifier(input_dim=classifier_in_dim)
-        self.models["edge_classifier"].to(self.device)
+        self.parameters_rpn += list(self.models["sparse_backbone"].parameters())
+        self.parameters_rpn += list(self.models["rpn"].parameters())
 
-        init_weights(self.models["edge_classifier"], init_type='kaiming', init_gain=0.02)
-        init_weights(self.models["voxel_encoder"], init_type='kaiming', init_gain=0.02)
-        init_weights(self.models["edge_encoder"], init_type='kaiming', init_gain=0.02)
+        # Dense Backbone, Completion, Nocs
+        self.models["dense_backbone"] = networks.DenseBackboneEPND2(conf=cfg['dense_backbone'])
+        self.models["dense_backbone"].to(self.device)
+        self.backbone = BDenseBackboneGeo(cfg['dense_backbone'], self.models['dense_backbone'])
 
-        self.parameters_to_train += list(self.models["voxel_encoder"].parameters())
-        self.parameters_to_train += list(self.models["edge_classifier"].parameters())
-        self.parameters_to_train += list(self.models["edge_encoder"].parameters())
+        self.models["completion"] = networks.DenseCompletionDec2Bigger(conf=cfg['completion'])
+        self.models["completion"].to(self.device)
+        self.completion = BCompletionDec2(cfg['completion'], self.models['completion'])
 
-        self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate, weight_decay=self.opt.weight_decay)
+        self.models["nocs"] = networks.DenseNocDec2(conf=cfg['nocs'])
+        self.models["nocs"].to(self.device)
+        self.noc = BNocDec2(cfg['nocs'], self.models['nocs'])
+
+
+        self.parameters_general += list(self.models["dense_backbone"].parameters())
+        self.parameters_general += list(self.models["completion"].parameters())
+        self.parameters_general += list(self.models["nocs"].parameters())
+
+
+
+
+        #init_weights(self.models["edge_classifier"], init_type='kaiming', init_gain=0.02)
+        #init_weights(self.models["voxel_encoder"], init_type='kaiming', init_gain=0.02)
+        #init_weights(self.models["edge_encoder"], init_type='kaiming', init_gain=0.02)
+       
 
         #self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, 15, 0.5)
-        
-        self.classifier_dataset = {}
 
         # Loss Function ---------------------------------------------------------------------------------------------
-        if self.opt.use_triplet:
-            print('Using Triplet Loss for gradients ...')
-            self.criterion = nn.TripletMarginLoss(margin=1.0, p=2.0, reduction='mean') # p=2 is euclidian dist, m=1 margin between anchor and negative sample
-            self.loss_key = 'Triplet_loss'
-        elif self.opt.use_l1:
-            print('Using L1 Loss for gradients ...')
-            self.criterion = nn.L1Loss(reduction='mean')
-            self.loss_key = 'L1_loss'
-        else:
-            print('Using BCE Loss for gradients ...')
-            self.loss_key = 'BCE_loss'
-        '''
+
+        # Optimizer --------------------------------------------------------------------------------------------------
+        self.rpn_optimizer = optim.Adam(self.parameters_rpn, self.opt.learning_rate,
+                                          weight_decay=self.opt.weight_decay)
+
+        self.general_optimizer = optim.Adam(self.parameters_general, self.opt.learning_rate,
+                                        weight_decay=self.opt.weight_decay)
         # Dataset ----------------------------------------------------------------------------------------------------
         DATA_DIR = CONF.PATH.FRONTDATA
         self.dataset = datasets.Front_dataset
@@ -151,7 +169,31 @@ class Trainer:
                     and self.opt.save_model and (self.epoch+1) >= self.opt.start_saving:
                 self.save_model(is_val=False)
 
-    def inference(self, vis_pose=False):
+    def val(self):
+        self.set_eval()
+
+        print("Starting evaluation ...")
+
+        for batch_idx, inputs in enumerate(self.val_loader):
+
+            with torch.no_grad():
+                outputs, losses, analyses, _ = self.validation_step(inputs)
+
+                '''
+                eval_df, gt_eval_df = evaluate(outputs, inputs, losses, analyses)
+                collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
+                collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
+                                                                ignore_index=True)
+                '''
+
+        #self.log("val", val_loss_mean)
+
+        #self._save_valmodel(val_loss_mean)
+        del inputs, outputs, losses
+
+        self.set_train()
+
+    def inference(self):
         """
         Run the entire inference pipeline
         """
@@ -160,282 +202,201 @@ class Trainer:
         self.load_model()
         self.set_eval()
 
-        overall_targets = []
-        overall_predictions = []
-        overall_gt_objects = 0
-        overall_misses = 0
-        overall_fps = 0
-
         for batch_idx, inputs in enumerate(self.test_loader):
             with torch.no_grad():
-                outputs, _ = self.process_batch(inputs, mode='test')
-
-            # Eval Metrics
-            for idx, output in enumerate(outputs):
-                overall_predictions.append(output['prediction'])
-                overall_targets.append(output['target'])
-                overall_gt_objects += output['total_gt_objs']
-                overall_misses += output['misses']
-                overall_fps += output['false_positives']
-
-                if vis_pose:
-                    visualise_tracking(inputs[idx], output)
-
-            if int(batch_idx + 1) % 10 == 0:
-                predictions = np.concatenate(overall_predictions)
-                targets = np.concatenate(overall_targets)
-
-                Prec = get_precision(predictions, targets)
-                Rec = get_recall(predictions, targets)
-                F1 = get_f1(predictions, targets)
-                MOTA, _ = get_MOTA(predictions, targets, overall_gt_objects, overall_misses, overall_fps)
-
-                print("[Batch Idx]: ", batch_idx + 1, "[MOTA]: ", MOTA, "[F1 score]: ", F1, "[Precision]: ", Prec,
-                      "[Recall]: ", Rec)
-
-        predictions = np.concatenate(overall_predictions)
-        targets = np.concatenate(overall_targets)
-
-        Prec = get_precision(predictions, targets)
-        Rec = get_recall(predictions, targets)
-        F1 = get_f1(predictions, targets)
-        MOTA, id_switches = get_MOTA(predictions, targets, overall_gt_objects, overall_misses, overall_fps)
-
-        print("Final Evaluation Scores :", "[MOTA]: ", MOTA, "[F1 score]: ", F1, "[Precision]: ", Prec, "[Recall]: ", Rec)
-        print("Numbers :", "[Misses]: ", overall_misses, "[False Positives]: ", overall_fps, "[ID Switches]: ", id_switches)
+                outputs = self.infer_step(inputs)
 
     def run_epoch(self):
-        """
-        Run a single epoch of training and validation
-        """
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
-            _, losses = self.process_batch(inputs, mode='train')
+            _, losses, analyses, _ = self.training_step(inputs)
+            rpn_loss = losses['rpn']['total_loss']
+            loss = losses['total_loss']
 
-            loss = losses[self.loss_key]
+            self.rpn_optimizer.zero_grad()
+            self.general_optimizer.zero_grad()
 
-            self.model_optimizer.zero_grad()
+            rpn_loss.backward()
             loss.backward()
-            self.model_optimizer.step()
 
+            losses['total_loss'] = loss.item() + rpn_loss.item()  # release graph after backprop
+
+            self.rpn_optimizer.step()
+            self.general_optimizer.step()
+
+            torch.cuda.empty_cache()
+
+            # logging
             duration = time.time() - before_op_time
 
             self.opt.log_frequency = 1
             if int(batch_idx + 1) % self.opt.log_frequency == 0:
-                self.log_time(batch_idx, duration, loss.cpu().data)
+                self.log_time(batch_idx, duration, losses['total_loss'])
                 self.log("train", losses)
-            '''
-            if int(batch_idx + 1) % int(round(len(self.train_loader)/1)) == 0: # validation n time per epoch
-                self.val()
-            '''
+
             self.step += 1
         #self.model_lr_scheduler.step()
         self.val()
 
-    def process_batch(self, inputs, mode='train'):
+    def training_step(self, inputs):
         '''
-        Process batch:
-        1. Siamese Network encodes voxel grids in feature space and concat with Pose for object feature
-        2. Get active/non-active edges (TARGETS) by computing IoU pred and GT and compare GT object ids
-        -> obj1 img1 with all obj img2, obj2 img1 with all obj img2
-        3. Concat object features between consecutive frames -> feature vector of 2 x 16 object features
-        5. Edge classification into active non-active
+        One general training step of the whole network pipeline
         '''
+        total_loss = torch.cuda.FloatTensor([0])
+        losses = dict()
+        analyses = dict()
 
-        batch_loss = 0
-        batch_size = len(inputs)
-        batch_output = []
+        bdscan = inputs
 
-        for batch_idx, input in enumerate(inputs):
+        # Sparse Pipeline ---------------------------------------------------------------------------------------------
+        s_e2 = self.sparse_backbone.training_step(bdscan)
+        rpn_output, rpn_losses, rpn_analyses, rpn_timings = self.rpn.training_step(s_e2, bdscan)
+        losses["rpn"] = rpn_losses
+        losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
+        bbbox_lvl0, bgt_target, brpn_conf = rpn_output
 
-            graph_in_features = []
-            num_imgs = len(input)
-            total_gt_objs = 0
-            total_pred_objs = 0
-            misses = 0
+        # Dense Pipeline ----------------------------------------------------------------------------------------------
+        x_e1, x_e2, x_d2 = self.backbone.training_step(bdscan)
 
-            for i in range(num_imgs):
+        # Targets
+        btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
+        btarget_noc = []
+        for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
+            inst_crops = vg_crop(bdscan.bscan_inst_mask[B], bbox_lvl0)
 
-                # One voxel batch consists of all instances in one image
-                voxels = torch.unsqueeze(input[i]['voxels'], dim=1) # num_instances x 1 x 32 x 32 x 32
-                num_instances = int(voxels.shape[0])
-                voxel_feature = torch.unsqueeze(self.models["voxel_encoder"](voxels.to(self.device)), dim=0) # 1 x num_instances x feature_dim
+            target_num_occs = [(torch.abs(bdscan.bobjects[B][obj_idx].sdf) < 2).sum() for obj_idx in gt_target]
+            inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
+                                zip(gt_target, inst_crops)]
+            valid_inst_occ_target = []
+            valid_bbox_lvl0 = []
 
-                if not self.opt.no_pose: # with pose
-                    rot = torch.unsqueeze(input[i]['rotations'], dim=0)  # 1 x num_instances x 3
-                    trans = torch.unsqueeze(input[i]['translations'], dim=0) # 1 x num_instances x 3
-                    scale = torch.unsqueeze(torch.unsqueeze(input[i]['scales'], -1), dim=0) # 1 x num_instances x 1
-                    pose = torch.cat((rot, trans, scale), dim=-1) # 1 x num_instance x 7
-                    #print('Pose feature', pose.shape)
+            valid_gt_target_compl = []
 
-                    img_feat = torch.cat((voxel_feature, pose.to(self.device)), dim=-1) # 1 x num instances x 16
-                else:
-                    img_feat = voxel_feature
+            for j, (inst_occ_target, target_num_occ, obj_idx) in enumerate(
+                    zip(inst_occ_targets, target_num_occs, gt_target)):
+                if inst_occ_target.sum() > target_num_occ * 0.05:
+                    valid_inst_occ_target.append(inst_occ_target)
+                    valid_bbox_lvl0.append(bbox_lvl0[j])
+                    valid_gt_target_compl.append(obj_idx)
+            btarget_occ.append(valid_inst_occ_target)
+            bbbox_lvl0_compl.append(valid_bbox_lvl0)
+            bgt_target_compl.append(valid_gt_target_compl)
 
-                graph_in_features.append(img_feat)
+            target_noc = []
+            if len(valid_bbox_lvl0) > 0:
+                for bbox in valid_bbox_lvl0:
+                    target_noc.append(vg_crop(bdscan.bscan_noc[B], bbox))
+            btarget_noc.append(target_noc)
 
-                per_img_gt_objs = int(input[i]['gt_object_id'].shape[-1])
-                total_gt_objs += per_img_gt_objs # Number of ground truth objects in one frame
-                total_pred_objs += num_instances # Number of predicted objects in one frame
+        bbbox_lvl0_compl_s = [torch.stack(bboxes, 0) if len(bboxes) > 0 else [] for bboxes in bbbox_lvl0_compl]
 
-                if num_instances < per_img_gt_objs: # Missing detections/ False Negatives per image or for a GT box no matching pred box found
-                    misses += per_img_gt_objs - num_instances
+        # Completion
+        completion_output, completion_losses, completion_analyses, completion_timings = self.completion.training_step(
+            x_d2, x_e2, x_e1, bdscan, bbbox_lvl0_compl_s, bgt_target_compl
+        )
+        losses["completion"] = completion_losses
+        total_loss += torch.mean(torch.cat(completion_losses["bweighted_loss"], 0))
 
-            # Object Association
-            scene_id = input[0]['scene'] + '_' + mode
+        # Nocs
+        noc_output, noc_losses, noc_analyses, noc_timings = self.noc.training_step(
+            x_d2, x_e2, x_e1, bdscan, bbbox_lvl0_compl_s, bgt_target_compl
+        )
+        losses["noc"] = noc_losses
+        analyses["noc"] = noc_analyses
+        total_loss += torch.mean(torch.cat(noc_losses["bweighted_loss"], 0))
 
-            if scene_id not in self.classifier_dataset:
-                classifier_data = construct_siamese_dataset(input, graph_in_features, thres=self.box_iou_thres)
-                self.classifier_dataset[scene_id] = classifier_data
-                edge_features = self.classifier_dataset[scene_id]['edge_features']
-            else:
-                try:
-                    edge_features = recompute_edge_features(graph_in_features, self.classifier_dataset[scene_id]['obj_ids'])
-                except:
-                    print('ID issue :', scene_id)
-                    traceback.print_exc()
+        losses["total_loss"] = total_loss
 
-            targets = self.classifier_dataset[scene_id]['targets']
-            false_positives = self.classifier_dataset[scene_id]['false_positives']
-            vis_idxs = self.classifier_dataset[scene_id]['vis_idxs']
-            non_empty = False
+        return None, losses, analyses, {}
 
-            if self.opt.use_triplet:
-                # Only used for triplet loss
-                anchors = self.classifier_dataset[scene_id]['anchors']
-                positive_samples = self.classifier_dataset[scene_id]['positive_samples']
-                negative_samples = self.classifier_dataset[scene_id]['negative_samples']
-
-                if anchors:
-                    non_empty = True
-                    anchors = torch.cat(anchors, dim=0)
-                    positive_samples = torch.cat(positive_samples, dim=0)
-                    negative_samples = torch.cat(negative_samples, dim=0)
-
-            if edge_features:
-                edge_feature = torch.cat(edge_features, dim=0)# num instance combinations in one sequence x 32
-                edge_feature = compute_edge_emb(edge_feature, self.models['edge_encoder'], voxel_dim=self.voxel_out_dim)
-            else:
-                print('Empty tensor', ', Bad scene:', input[0]['scene'])
-                batch_loss = 1
-                continue
-
-            # Binary Classifier, batch is all combinations of instances in one sequence
-            similarity_pred = torch.squeeze(self.models['edge_classifier'](edge_feature.type(torch.float32)), dim=-1) # n*m
-            targets = torch.tensor(targets, dtype=torch.float32, device=self.device)
-
-            if self.opt.use_triplet and non_empty:
-                losses = self.compute_triplet_loss(anchors, positive_samples, negative_samples) # shape n samples x 16
-            elif self.opt.use_triplet:
-                print('No triplet pairs found for sequence {}'.format(input[0]['scene']))
-                losses = {}
-                losses[self.loss_key] = 1
-            else: # for BCE and L1 loss compute distance in edge prediction space
-                losses = self.compute_losses(similarity_pred, targets)
-
-            # Accumulate loss/ outputs over a batch
-            similarity_pred = torch.sigmoid(similarity_pred)
-            batch_loss += losses[self.loss_key] / batch_size
-            outputs = {'total_gt_objs': total_gt_objs, 'false_positives': false_positives, 'misses': misses, 'vis_idxs': vis_idxs,
-                       'prediction': similarity_pred.cpu().detach().numpy(), 'target': targets.cpu().detach().numpy()} # output per scene
-
-            batch_output.append(outputs)
-
-        losses[self.loss_key] = batch_loss
-        return batch_output, losses
-
-    def val(self):
-        """
-        Validate the model on the validation set
-        Batch size 1
-        """
-        self.set_eval()
-
-        print("Starting evaluation ...")
-        val_loss = []
-
-        overall_targets = []
-        overall_predictions = []
-        overall_gt_objects = 0
-        overall_misses = 0
-        overall_fps = 0
-
-
-        for batch_idx, inputs in enumerate(self.val_loader):
-
-            with torch.no_grad():
-                outputs, losses = self.process_batch(inputs, mode='val')
-
-            if isinstance(losses[self.loss_key], float):
-                val_loss.append(losses[self.loss_key])
-            else:
-                val_loss.append(losses[self.loss_key].detach().cpu().item())
-
-            # Eval Metrics
-            for output in outputs:
-
-                overall_predictions.append(output['prediction'])
-                overall_targets.append(output['target'])
-                overall_gt_objects += output['total_gt_objs']
-                overall_misses += output['misses']
-                overall_fps += output['false_positives']
-
-            if int(batch_idx + 1) % 10 == 0:
-                print("[Validation] Batch Idx: ", batch_idx + 1)
-
-        predictions = np.concatenate(overall_predictions)
-        targets = np.concatenate(overall_targets)
-
-        Prec = get_precision(predictions, targets)
-        Rec = get_recall(predictions, targets)
-        F1 = get_f1(predictions, targets)
-        MOTA, _ = get_MOTA(predictions, targets, overall_gt_objects, overall_misses, overall_fps)
-
-        print('[Validation Loss]: ', np.array(val_loss).mean(), "[Precision]: ", Prec,
-              "[Recall]: ", Rec, "[F1_score]: ", F1, "[MOTA]: ", MOTA)
-
-        val_loss_mean = {self.loss_key: np.array(val_loss).mean(), 'Precision': Prec,
-                         'Recall': Rec, 'F1_score': F1, 'MOTA': MOTA}
-
-        self.log("val", val_loss_mean)
-
-        self._save_valmodel(val_loss_mean)
-        del inputs, outputs, losses
-
-        self.set_train()
-
-    def compute_losses(self, inputs, targets):
+    def validation_step(self, inputs):
         '''
-        Balanced loss giving active and non-active edges same magnitude
-        inputs: predictions
+        One general validation step of the whole network pipeline
         '''
+        total_loss = 0
+        losses = dict()
+        analyses = dict()
+        outputs = dict()
 
-        losses = {}
+        bdscan = inputs
 
-        if self.opt.use_l1:
-            l1_loss = self.criterion(torch.sigmoid(inputs), targets)
-            losses[self.loss_key] = l1_loss
-        else:
-            num_active = torch.count_nonzero(targets)
-            num_all = torch.numel(targets)
-            pos_weight = (num_all - num_active) / num_active
-            balanced_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="mean", pos_weight=pos_weight)
+        # Sparse Pipeline ---------------------------------------------------------------------------------------------
+        s_e2 = self.sparse_backbone.validation_step(bdscan)
+        rpn_output, rpn_losses, rpn_analyses, rpn_timings = self.rpn.validation_step(s_e2, bdscan)
+        losses["rpn"] = rpn_losses
+        losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
+        bbbox_lvl0, bgt_target, brpn_conf = rpn_output
 
-            losses[self.loss_key] = balanced_loss
+        # Dense Pipeline ----------------------------------------------------------------------------------------------
+        x_e1, x_e2, x_d2 = self.backbone.validation_step(bdscan)
 
-        return losses
+        # Targets
+        btarget_occ, bgt_target_compl = [], []
+        btarget_noc = []
+        for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
+            inst_crops = vg_crop(bdscan.bscan_inst_mask[B], bbox_lvl0)
+            target_num_occs = [(torch.abs(bdscan.bobjects[B][obj_idx].sdf) < 2).sum() for obj_idx in gt_target]
+            inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
+                                zip(gt_target, inst_crops)]
+            btarget_occ.append(inst_occ_targets)
+            bgt_target_compl.append(gt_target)
 
-    def compute_triplet_loss(self, anchor, positive, negative):
 
-        losses = {}
+            target_noc = []
+            for bbox in bbox_lvl0:
+                target_noc.append(vg_crop(bdscan.bscan_noc[B], bbox))
+            btarget_noc.append(target_noc)
 
-        triplet = self.criterion(anchor, positive, negative)
-        losses[self.loss_key] = triplet
+        # Completion
+        completion_output, completion_losses, completion_analyses, completion_timings = self.completion.validation_step(
+            x_d2, x_e2, x_e1, bdscan, bbbox_lvl0, bgt_target_compl
+        )
+        losses["completion"] = completion_losses
+        total_loss += torch.mean(torch.cat(completion_losses["bweighted_loss"]))
+        outputs["completion"] = completion_output
 
-        return losses
+        # Nocs
+        binst_occ = [[x.squeeze() for x in compls] for compls in outputs["completion"]]
+        noc_output, noc_losses, noc_analyses, noc_timings = self.noc.validation_step(
+            x_d2, x_e2, x_e1, bdscan, bbbox_lvl0, bgt_target_compl, binst_occ
+        )
+        losses["noc"] = noc_losses
+        analyses["noc"] = noc_analyses
+        total_loss += torch.mean(torch.cat(noc_losses["bweighted_loss"]))
 
+        outputs["noc"] = noc_output
+
+        losses["total_loss"] = total_loss
+
+        return outputs, losses, analyses, {}
+
+    def infer_step(self, inputs):
+        '''
+        One general inference step of the whole network pipeline
+        '''
+        outputs = dict()
+
+        bdscan = inputs
+
+        # Sparse Pipeline ---------------------------------------------------------------------------------------------
+        s_e2 = self.sparse_backbone.infer_step(bdscan)
+        rpn_output = self.rpn.infer_step(s_e2, bdscan)
+        bbbox_lvl0, bgt_target, brpn_conf = rpn_output
+        outputs["rpn"] = {"bbbox_lvl0": bbbox_lvl0, "bgt_target": bgt_target, "brpn_conf": brpn_conf}
+
+        # Dense Pipeline ----------------------------------------------------------------------------------------------
+        x_e1, x_e2, x_d2 = self.backbone.infer_step(bdscan)
+
+        completion_output = self.completion.infer_step(x_d2, x_e2, x_e1, bbbox_lvl0)
+        outputs["completion"] = completion_output
+        binst_occ = [[x.squeeze() for x in compls] for compls in outputs["completion"]]
+
+        noc_output = self.noc.infer_step(x_d2, x_e2, x_e1, bdscan, bbbox_lvl0, binst_occ)
+        outputs["noc"] = noc_output
+
+        return outputs
 
     def log(self, mode, losses):
         """Write an event to the tensorboard events file
