@@ -3,10 +3,11 @@ import cv2
 import h5py
 import numpy as np
 import torch
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import MinkowskiEngine as ME
 
 from utils.voxel_utils import binvox_rw
-
 
 def read_csv_mapping(path):
     """
@@ -107,6 +108,66 @@ def rescale_voxel(unscaled_voxel, scale, debug_mode=False):
         plt.show()
 
     return rescale_
+
+def pcd2occupancy(pcd, max_ext=96):
+    '''
+    pcd: in range 0 to max
+    Creates a dense occupancy grid from a Nx3 pointcloud, preserves relative size between x,y,z
+    max_extension is the maximal extension of the final grid
+    '''
+
+    occupancy_grid = np.zeros((max_ext, max_ext, max_ext))
+    max_val= pcd.max()
+    scaling = max_ext / max_val
+    grids_idxs = np.rint(pcd * scaling).astype(int)
+    grids_idxs[grids_idxs > max_ext-1] = max_ext-1 # all values rounded up to max_ext are set to max_ext-1
+    occupancy_grid[grids_idxs] = 1
+
+    return occupancy_grid
+
+def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 96, 192], debug_mode=False):
+    '''
+    coords: sparse coords of voxel occupancy values
+    Creates a dense occupancy grid from sparse coords
+    returns: occupancy grid with shape x,y,z -> for W x H x L switch dim z and y
+    '''
+
+    max_extensions = torch.max(coords, dim=0).values + 1
+    occupancy_grid = torch.zeros(max_extensions.tolist())
+    occ_idxs = coords.type(torch.LongTensor)
+    x = occ_idxs[:,0]
+    y = occ_idxs[:,1]
+    z = occ_idxs[:,2]
+    occupancy_grid[x, y, z] = 1
+
+    if debug_mode:
+        np_grid = occupancy_grid.detach().cpu().numpy()
+        ax = plt.figure().add_subplot(projection='3d')
+        ax.voxels(np_grid, edgecolor='k')
+        plt.show()
+
+    if as_padded_whl:
+        occupancy_grid = xyz2whl(occupancy_grid, padded_size=padded_size)
+
+    return occupancy_grid
+
+def xyz2whl(occupancy_grid, padded_size=None):
+    '''
+    transfroms a xyz occupancy grid of changing size to fixed size grid of padded size in the format whl
+    '''
+
+    whl_grid = occupancy_grid.permute(0, 2, 1).contiguous()
+
+    if padded_size is not None:
+
+        pad_diff = np.array(padded_size) - whl_grid.shape
+        paddings = np.max([pad_diff, np.zeros(3)], 0).astype(int)
+        p2d = [(0, i) for i in paddings]
+        whl_grid = np.pad(whl_grid.numpy(), p2d, "constant", constant_values=3 * [(0, 0)])
+
+    return torch.from_numpy(whl_grid)
+
+
 
 def add_halfheight(location, box):
     '''

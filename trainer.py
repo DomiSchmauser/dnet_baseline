@@ -78,17 +78,8 @@ class Trainer:
         self.parameters_general += list(self.models["completion"].parameters())
         self.parameters_general += list(self.models["nocs"].parameters())
 
-
-
-
         #init_weights(self.models["edge_classifier"], init_type='kaiming', init_gain=0.02)
-        #init_weights(self.models["voxel_encoder"], init_type='kaiming', init_gain=0.02)
-        #init_weights(self.models["edge_encoder"], init_type='kaiming', init_gain=0.02)
-       
-
         #self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, 15, 0.5)
-
-        # Loss Function ---------------------------------------------------------------------------------------------
 
         # Optimizer --------------------------------------------------------------------------------------------------
         self.rpn_optimizer = optim.Adam(self.parameters_rpn, self.opt.learning_rate,
@@ -258,7 +249,7 @@ class Trainer:
         bbbox_lvl0, bgt_target, brpn_conf = rpn_output
 
         # Dense Pipeline ----------------------------------------------------------------------------------------------
-        x_e1, x_e2, x_d2 = self.backbone.training_step(bdscan)
+        x_e1, x_e2, x_d2 = self.backbone.training_step(bdscan) # enc_layer_1, enc_layer_2, dec_layer_2
 
         # Targets
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []

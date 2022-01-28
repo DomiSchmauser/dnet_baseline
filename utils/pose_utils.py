@@ -38,3 +38,20 @@ def backproject_rgb(rgb, depth, intrinsics, debug_mode=False):
 
 
     return rgb_pts
+
+def cam2world(rgb_pts, campose):
+    '''
+    transform camera space pc to world space pc
+    '''
+    trans = campose[:3, 3:]
+    rot = campose[:3, :3]
+
+    cam_pts = rgb_pts[:,:3]
+    world_pc = np.dot(rot, cam_pts.transpose()) + trans
+    world_pc = world_pc.transpose()
+
+    rgb_world = np.concatenate((world_pc, rgb_pts[:,3:]), axis=-1)
+
+    return rgb_world
+
+

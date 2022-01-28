@@ -24,7 +24,6 @@ class PureSparseBackboneEPND2_Ex1(nn.Module):
             ME.MinkowskiReLU(),
         )
         self.conv2 = ME.MinkowskiConvolution(self.num_features, self.num_features * 2, kernel_size=3, stride=1, dimension=3)
-        # TODO STRIDE USED AT KERNEL_SIZE?
         self.enc2 = nn.Sequential(
             ME.MinkowskiConvolution(self.num_features*2, self.num_features * 4, kernel_size=3, stride=1, dimension=3),
             ME.MinkowskiBatchNorm(self.num_features * 4),
