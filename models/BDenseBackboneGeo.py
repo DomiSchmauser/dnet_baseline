@@ -8,7 +8,7 @@ class BDenseBackboneGeo(nn.Module):
         self.net = net
 
     def forward(self, bdscan):
-        return self.net(bdscan.btsdf_geo)
+        return self.net(bdscan) #self.net(bdscan.btsdf_geo)
     
     def training_step(self, bdscan):
         return self.forward(bdscan)

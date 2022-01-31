@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from torch.nn import functional as F
+import MinkowskiEngine as ME
 
 import networks
 import datasets
@@ -239,23 +240,38 @@ class Trainer:
         losses = dict()
         analyses = dict()
 
-        bdscan = inputs
+        # BATCH INPUT PUT IN COLLATE FUNCTION
+        dense_features = []
+        coords = []
+        feats = []
+        for img in inputs[0]:
+            img_grid = torch.unsqueeze(img['dense_grid'], dim=0)
+            dense_features.append(img_grid)
+            coords.append(img['sparse_coords'])
+            feats.append(img['sparse_feats'])
+
+        dense_features = torch.unsqueeze(torch.cat(dense_features, dim=0), dim=1).to(self.device) # Num imgs x 1 x W(x) x H(z) x L(y)
+        bcoords = ME.utils.batched_coordinates(coords)
+        bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
+
+
+        sparse_features = ME.SparseTensor(bfeats.to(self.device), bcoords.to(self.device)) # Sparse tensor expects batched data
+
+        # Dense Pipeline ----------------------------------------------------------------------------------------------
+        x_e1, x_e2, x_d2 = self.backbone.training_step(dense_features)  # enc_layer_1, enc_layer_2, dec_layer_2
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
-        s_e2 = self.sparse_backbone.training_step(bdscan)
+        s_e2 = self.sparse_backbone.training_step(sparse_features)
         rpn_output, rpn_losses, rpn_analyses, rpn_timings = self.rpn.training_step(s_e2, bdscan)
         losses["rpn"] = rpn_losses
         losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
         bbbox_lvl0, bgt_target, brpn_conf = rpn_output
 
-        # Dense Pipeline ----------------------------------------------------------------------------------------------
-        x_e1, x_e2, x_d2 = self.backbone.training_step(bdscan) # enc_layer_1, enc_layer_2, dec_layer_2
-
         # Targets
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
         btarget_noc = []
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
-            inst_crops = vg_crop(bdscan.bscan_inst_mask[B], bbox_lvl0)
+            inst_crops = vg_crop(bdscan.bscan_inst_mask[B], bbox_lvl0) # BSCAN INST MASK IN 3D? or just box and crop unoccupied
 
             target_num_occs = [(torch.abs(bdscan.bobjects[B][obj_idx].sdf) < 2).sum() for obj_idx in gt_target]
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in

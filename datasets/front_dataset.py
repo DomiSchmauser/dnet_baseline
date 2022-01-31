@@ -12,8 +12,8 @@ from torch.utils.data import Dataset
 sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
-from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, pcd2occupancy, coords2occupancy
-from utils.pose_utils import backproject_rgb, cam2world
+from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel
+from utils.pose_utils import backproject_rgb, cam2world, occ2noc
 
 class Front_dataset(Dataset):
 
@@ -68,8 +68,8 @@ class Front_dataset(Dataset):
                 record['pc_offset'] = offset
 
             # Sparse Input
-            record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=0.04)
-            # record['sparse_tensor'] = ME.SparseTensor(torch.from_numpy(record['sparse_feats']).to(self.device), record['sparse_coords'].to(self.device)) # Sparse tensor expects batched data
+            record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=0.03)
+
             # Dense Input
             record['dense_grid'] = coords2occupancy(record['sparse_coords'], padded_size=self.padded_size, as_padded_whl=True)
 
@@ -79,6 +79,10 @@ class Front_dataset(Dataset):
                 if anno['image_id'] == v['id']:
 
                     cat_id = anno['category_id'] # 1 = chair, 2 = table, 3 = sofa, 4 = bed
+                    if cat_id == 2:
+                        rot_sym = 'c2'
+                    else:
+                        rot_sym = 'None'
                     instance_id = anno['id']
                     jid = anno['jid']
                     cat_name = self.csv_dict[cat_id]
@@ -91,6 +95,20 @@ class Front_dataset(Dataset):
                     rot_3d = anno['3Drot']
                     loc_3d = add_halfheight(anno['3Dloc'], anno['3Dbbox'])
 
+                    # Load binvox
+                    bin_vox = get_voxel(voxel_path, scale)
+
+                    # Binvox to noc
+                    noc = occ2noc(bin_vox, rot_3d)
+
+                    # Debugging
+                    '''
+                    nocs_pcd = o3d.geometry.PointCloud()
+                    nocs_pcd.points = o3d.utility.Vector3dVector(noc)
+                    nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+                    o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
+                    '''
+
                     obj = {
                         'category_id': cat_id,
                         'instance_id': instance_id,
@@ -100,7 +118,10 @@ class Front_dataset(Dataset):
                         'segmask': segmask,
                         'scale': scale,
                         'rot': rot_3d,
-                        'loc': loc_3d
+                        'loc': loc_3d,
+                        'rot_sym': rot_sym,
+                        'noc': noc,
+                        'voxel': bin_vox,
                     }
                     obj_anns.append(obj)
 

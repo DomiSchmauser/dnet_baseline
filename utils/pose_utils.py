@@ -1,5 +1,24 @@
 import numpy as np
 import open3d as o3d
+import mathutils
+
+def occ2noc(voxel_grid, euler_rot):
+    '''
+    Calculate nocs map from occupancy grid and 3D rot
+    '''
+
+    euler = mathutils.Euler(euler_rot)
+    rot = np.array(euler.to_matrix())
+
+    nonzero_inds = np.nonzero(voxel_grid)[:-1]
+
+    points = nonzero_inds / 31 - 0.5
+    points = points.numpy()
+
+    world_pc = rot @ points.transpose()
+    world_pc = world_pc.transpose()
+
+    return world_pc
 
 
 def backproject_rgb(rgb, depth, intrinsics, debug_mode=False):

@@ -154,6 +154,7 @@ def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 96, 192], deb
 def xyz2whl(occupancy_grid, padded_size=None):
     '''
     transfroms a xyz occupancy grid of changing size to fixed size grid of padded size in the format whl
+    needs centered padding?
     '''
 
     whl_grid = occupancy_grid.permute(0, 2, 1).contiguous()
