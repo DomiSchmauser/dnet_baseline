@@ -241,22 +241,35 @@ class Trainer:
         analyses = dict()
 
         # BATCH INPUT PUT IN COLLATE FUNCTION
+        chunk_size = 2
         dense_features = []
         coords = []
         feats = []
-        for img in inputs[0]:
+        sparse_features = []
+
+        for idx, img in enumerate(inputs[0]):
             img_grid = torch.unsqueeze(img['dense_grid'], dim=0)
             dense_features.append(img_grid)
             coords.append(img['sparse_coords'])
             feats.append(img['sparse_feats'])
 
+            if (idx+1) % chunk_size  == 0:
+                bcoords = ME.utils.batched_coordinates(coords)
+                bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
+                sparse_chunk = ME.SparseTensor(bfeats.to(self.device),
+                                                  bcoords.to(self.device))  # Sparse tensor expects batched data
+                coords = []
+                feats = []
+                sparse_features.append(sparse_chunk)
+
+
         dense_features = torch.unsqueeze(torch.cat(dense_features, dim=0), dim=1).to(self.device) # Num imgs x 1 x W(x) x H(z) x L(y)
-        bcoords = ME.utils.batched_coordinates(coords)
-        bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
 
 
-        sparse_features = ME.SparseTensor(bfeats.to(self.device), bcoords.to(self.device)) # Sparse tensor expects batched data
 
+        #coords, feats = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
+
+        sparse_features = sparse_features[0] # Memory issue requires chunking loop here
         # Dense Pipeline ----------------------------------------------------------------------------------------------
         x_e1, x_e2, x_d2 = self.backbone.training_step(dense_features)  # enc_layer_1, enc_layer_2, dec_layer_2
 
@@ -267,7 +280,7 @@ class Trainer:
         losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
         bbbox_lvl0, bgt_target, brpn_conf = rpn_output
 
-        # Targets
+        # Targets -> can be rewritten via per object nocs and occupancy -> use max overlapping with gt 3d box
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
         btarget_noc = []
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):

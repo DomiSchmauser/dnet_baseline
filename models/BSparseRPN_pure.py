@@ -196,9 +196,6 @@ class BSparseRPN_pure(nn.Module):
             bweighted_loss.append(weighted_loss)
 
 
-
-
-           
         losses = {'bweighted_loss': bweighted_loss, 'bobjness_loss': bobjness_loss, 'bbbox_loss': bbbox_loss}
         return losses
         

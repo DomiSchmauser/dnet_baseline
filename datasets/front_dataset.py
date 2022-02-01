@@ -28,6 +28,7 @@ class Front_dataset(Dataset):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.shift_pc = True
         self.padded_size = [192, 96, 192]
+        self.debugging_mode = False
 
     def __len__(self):
         return len(self.scenes)
@@ -89,11 +90,16 @@ class Front_dataset(Dataset):
                     voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
                     box_2d = anno['bbox']
                     segmask = anno['segmentation']
-                    box_3d = anno['3Dbbox']
                     # Pose
                     scale = np.array(anno['3Dscale'])
                     rot_3d = anno['3Drot']
+                    box_3d = anno['3Dbbox']
                     loc_3d = add_halfheight(anno['3Dloc'], anno['3Dbbox'])
+
+                    # Requires according shift of GT 3D location annotations
+                    if self.shift_pc:
+                        box_3d -= record['pc_offset']
+                        loc_3d -= record['pc_offset']
 
                     # Load binvox
                     bin_vox = get_voxel(voxel_path, scale)
@@ -101,12 +107,13 @@ class Front_dataset(Dataset):
                     # Binvox to noc
                     noc = occ2noc(bin_vox, rot_3d)
 
-                    # Debugging
                     '''
-                    nocs_pcd = o3d.geometry.PointCloud()
-                    nocs_pcd.points = o3d.utility.Vector3dVector(noc)
-                    nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
-                    o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
+                    # Debugging
+                    if self.debugging_mode:
+                        nocs_pcd = o3d.geometry.PointCloud()
+                        nocs_pcd.points = o3d.utility.Vector3dVector(noc)
+                        nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+                        o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
                     '''
 
                     obj = {
@@ -127,6 +134,20 @@ class Front_dataset(Dataset):
 
             record['obj_anns'] = obj_anns
             img_dict.append(record)
+
+            # Debugging
+            if self.debugging_mode:
+                pcd = o3d.geometry.PointCloud()
+                pcd.points = o3d.utility.Vector3dVector(record['pc_rgb'][:,:3])
+                nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+                boxes = []
+                for ann in obj_anns:
+                    vis_box = o3d.geometry.OrientedBoundingBox()
+                    vis_box = vis_box.create_from_points(o3d.utility.Vector3dVector(ann['box_3d']))
+                    boxes.append(vis_box)
+                boxes.append(pcd)
+                boxes.append(nocs_origin)
+                o3d.visualization.draw_geometries(boxes)
 
         return img_dict
 
