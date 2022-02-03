@@ -16,7 +16,6 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from torch.nn import functional as F
 import MinkowskiEngine as ME
-import open3d as o3d
 
 import networks
 import datasets
@@ -49,8 +48,6 @@ class Trainer:
 
         # Model setup --------------------------------------------------------------------------------------------------
         cfg = init_cfg()
-        self.min_coords = torch.IntTensor([0, 0, 0])
-        self.max_coords = torch.IntTensor([191, 95, 191])
 
         # Sparse Backbone & RPN
         self.models["sparse_backbone"] = networks.PureSparseBackboneCol_Res1(conf=cfg['sparse_backbone'])
@@ -243,88 +240,42 @@ class Trainer:
         losses = dict()
         analyses = dict()
 
-        # BATCH INPUT PUT IN COLLATE FUNCTION, currently with chunking -------------------------------------------------
+        # BATCH INPUT PUT IN COLLATE FUNCTION
+        chunk_size = 2
+        dense_features = []
+        coords = []
+        feats = []
+        sparse_features = []
 
-        for seq in inputs:
+        for idx, img in enumerate(inputs[0]):
+            img_grid = torch.unsqueeze(img['dense_grid'], dim=0)
+            dense_features.append(img_grid)
+            coords.append(img['sparse_coords'])
+            feats.append(img['sparse_feats'])
 
-            chunk_size = 1
-            occ = []
-            coords = []
-            feats = []
-            sparse_features = []
-            dense_features = []
-            sparse_reg_features = []
+            if (idx+1) % chunk_size  == 0:
+                bcoords = ME.utils.batched_coordinates(coords)
+                bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
+                sparse_chunk = ME.SparseTensor(bfeats.to(self.device),
+                                                  bcoords.to(self.device))  # Sparse tensor expects batched data
+                coords = []
+                feats = []
+                sparse_features.append(sparse_chunk)
 
-            for idx, img in enumerate(seq):
 
-                # Sequence Level
-                img_grid = torch.unsqueeze(img['dense_grid'], dim=0)
-                occ.append(img_grid)
-                coords.append(img['sparse_coords'])
-                feats.append(img['sparse_feats'])
+        dense_features = torch.unsqueeze(torch.cat(dense_features, dim=0), dim=1).to(self.device) # Num imgs x 1 x W(x) x H(z) x L(y)
 
-                # Object level
-                reg_values = np.zeros([1, 7, img['dense_grid'].shape[0], img['dense_grid'].shape[1], img['dense_grid'].shape[2]])
-                scan_inst_mask = img['obj_scan_mask']
 
-                for obj in img['obj_anns']:
-
-                    box_3d = obj['box_3d']
-                    obj_idx = obj['instance_id']
-
-                    obj_scan_mask = scan_inst_mask == int(obj_idx)
-
-                    # NOT SURE IF NECESSARY
-                    obj_scan_mask_torch = obj_scan_mask.cuda()
-                    obj_scan_mask_torch2 = F.conv3d(
-                        obj_scan_mask_torch.float().unsqueeze(0).unsqueeze(0), weight=torch.ones(1, 1, 9, 9, 9).cuda(),
-                        padding=4
-                    )[0][0]
-                    obj_scan_mask = (obj_scan_mask_torch2 > 0).cpu().numpy()
-
-                    obj_scan_coords = np.argwhere(obj_scan_mask)
-
-                    obj_center = (box_3d[3:6] + box_3d[:3]) / 2
-                    obj_size = (box_3d[3:6] - box_3d[:3]) / 2
-
-                    delta_t = obj_center - obj_scan_coords
-                    delta_s = np.ones_like(delta_t) * obj_size
-                    w = 1 - (np.linalg.norm(delta_t / delta_s, axis=1, ord=2) / np.sqrt(3))
-
-                    reg_values[0, :, obj_scan_mask] = np.concatenate([np.expand_dims(w, 1), delta_t, delta_s], 1)
-
-                sparse_reg_features.append(reg_values)
-
-                if (idx+1) % chunk_size == 0:
-                    bcoords = ME.utils.batched_coordinates(coords)
-                    bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
-                    sparse_chunk = ME.SparseTensor(bfeats.to(self.device),
-                                                      bcoords.to(self.device))  # Sparse tensor expects batched data
-                    #dense_chunk = sparse_chunk.dense(min_coordinate=self.min_coords)
-                    dense_chunk = torch.unsqueeze(torch.cat(occ, dim=0), dim=1).to(self.device)
-                    coords = []
-                    feats = []
-                    occ = []
-                    sparse_features.append(sparse_chunk)
-                    dense_features.append(dense_chunk)
-
-        # --------------------------------------------------------------------------------------------------------------
 
         #coords, feats = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
-        dense_features = dense_features[0]
-        sparse_features = sparse_features[0]
-        sparse_reg_features = torch.from_numpy(sparse_reg_features[0])
-        sparse_reg_tensor = ME.to_sparse(sparse_reg_features)
-        tester = sparse_reg_features[sparse_reg_features != 0]
-        rpn_gt = {}
-        rpn_gt['breg_sparse'] = sparse_reg_tensor
 
+        sparse_features = sparse_features[0] # Memory issue requires chunking loop here
         # Dense Pipeline ----------------------------------------------------------------------------------------------
         x_e1, x_e2, x_d2 = self.backbone.training_step(dense_features)  # enc_layer_1, enc_layer_2, dec_layer_2
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.training_step(sparse_features)
-        rpn_output, rpn_losses, rpn_analyses, rpn_timings = self.rpn.training_step(s_e2, rpn_gt) # input here regression values sparse
+        rpn_output, rpn_losses, rpn_analyses, rpn_timings = self.rpn.training_step(s_e2, bdscan)
         losses["rpn"] = rpn_losses
         losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
         bbbox_lvl0, bgt_target, brpn_conf = rpn_output

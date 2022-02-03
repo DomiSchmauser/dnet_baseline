@@ -55,7 +55,7 @@ class BCompletionDec2(nn.Module):
         if self.gt_augm:
             bgt_bbox, bgt_obj_inds = bdscan.bbboxes, bdscan.bobj_inds
             bbbox_lvl0 =  [cats(bbox_lvl0, gt_bbox,0)  for bbox_lvl0, gt_bbox in zip(bbbox_lvl0, bgt_bbox)]   
-            bgt_target =  [gt_target + gt_obj_inds  for gt_target, gt_obj_inds in zip(bgt_target, bgt_obj_inds)] # list concat, instance indicies
+            bgt_target =  [gt_target + gt_obj_inds  for gt_target, gt_obj_inds in zip(bgt_target, bgt_obj_inds)]
         
         bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
 

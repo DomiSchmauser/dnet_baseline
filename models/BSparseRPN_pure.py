@@ -7,7 +7,7 @@ from utils.anchor_handler import AnchorHandler
 from typing import Optional, List
 from torch_cluster import fps, nearest
 from block_timer.timer import Timer
-from vision3d.layers import nms3d
+#from vision3d.layers import nms3d
 
 from dvis import dvis
 
@@ -64,8 +64,8 @@ class BSparseRPN_pure(nn.Module):
 
             pred_conf = pred_conf[conf_mask]
             pred_reg_values = pred_reg_values[conf_mask]
-            pred_delta_t = pred_reg_values[:, 2:5].contiguous() # translational distance obj center to voxel
-            pred_delta_s = pred_reg_values[:, 5:9].contiguous() # size + w
+            pred_delta_t = pred_reg_values[:, 2:5].contiguous()
+            pred_delta_s = pred_reg_values[:, 5:9].contiguous()
 
             pred_center = pred_delta_t + pred_coords[conf_mask].cuda()
 
@@ -144,21 +144,22 @@ class BSparseRPN_pure(nn.Module):
             bgt_target.append(gt_target)
 
 
+           
         return bpred_bboxes, bgt_target, brpn_conf
         
 
-    def training_step(self, x_e2: torch.Tensor, rpn_gt):
+    def training_step(self, x_e2: torch.Tensor, bdscan):
         #with Timer('forward'):
-        bpred_reg_values = self.forward(x_e2) # num occ x 8 featuredim
+        bpred_reg_values = self.forward(x_e2)
         #with Timer('loss'):
-        losses = self.loss(bpred_reg_values, rpn_gt)
+        losses = self.loss(bpred_reg_values, bdscan)
         #with Timer('to bboxes'):
-        bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, rpn_gt, self.conf['min_conf_train'], self.conf['max_proposals_train'])
+        bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, bdscan, self.conf['min_conf_train'], self.conf['max_proposals_train'])
         # bdscan.bbboxes ~ bpred_bboxes
         return (bpred_bboxes, bgt_target, brpn_conf), losses, {}, {}
 
 
-    def loss(self, bpred_reg_values: torch.Tensor,  rpn_gt):
+    def loss(self, bpred_reg_values: torch.Tensor,  bdscan):
         
         bobjness_loss = []
         bbbox_loss = []
@@ -167,13 +168,13 @@ class BSparseRPN_pure(nn.Module):
 
         # per batch
         # check speed if better parallel
-        pred_coords_l, pred_reg_values_l = bpred_reg_values.decomposed_coordinates_and_features # in sparse tensor format list N x 3, N x 8
-        gt_coords_l, gt_reg_values_l = rpn_gt['breg_sparse'].decomposed_coordinates_and_features # gt occupancies N x 7
+        pred_coords_l, pred_reg_values_l = bpred_reg_values.decomposed_coordinates_and_features
+        gt_coords_l, gt_reg_values_l = bdscan.breg_sparse.decomposed_coordinates_and_features
         for (pred_coords, pred_reg_values, gt_coords, gt_reg_values) in zip(pred_coords_l, pred_reg_values_l, gt_coords_l, gt_reg_values_l):
             #if pred_coords != gt_coords:
             #    print("DAFIUQ")
              
-            pos_mask = gt_reg_values[:, 0] > 0 # occupancy mask -> 0 # bce loss # occupied
+            pos_mask = gt_reg_values[:, 0] > 0
             neg_mask = gt_reg_values[:, 0] == 0
 
             objness_loss = F.cross_entropy(pred_reg_values[:,:2], pos_mask.long()).unsqueeze(0)
@@ -183,9 +184,9 @@ class BSparseRPN_pure(nn.Module):
                 print(bdscan.bseq_name)
                 print(bdscan.bscan_idx)
                 pdb.set_trace()
+                
 
-            # center coord, extent x,y,z similar to votenet
-            bbox_loss = F.smooth_l1_loss(pred_reg_values[pos_mask,2:]/10, gt_reg_values[pos_mask,1:]/10).unsqueeze(0) #
+            bbox_loss = F.smooth_l1_loss(pred_reg_values[pos_mask,2:]/10, gt_reg_values[pos_mask,1:]/10).unsqueeze(0)
 
             bobjness_loss.append(objness_loss)
 
