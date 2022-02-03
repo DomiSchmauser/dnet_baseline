@@ -118,7 +118,7 @@ class Front_dataset(Dataset):
                     if self.debugging_mode:
                         dvis(np.expand_dims(box_3d, axis=0), fmt='box')
                         dvis(cropped_obj, c=1)
-                        
+
                     cropped_obj[cropped_obj != 0] = instance_id
                     record['obj_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]), int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
 
