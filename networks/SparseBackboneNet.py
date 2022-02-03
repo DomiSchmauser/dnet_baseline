@@ -169,15 +169,12 @@ class PureSparseBackboneCol_Res1(nn.Module):
             BasicBlock(self.num_features*2, self.num_features*2, dimension=3),
         )
                
-    def forward(self, x_geo, x_col, c_out):
+    def forward(self, x_geo):
         # Encode
-        #x = ME.cat(x_geo,x_col)
         x = x_geo
         x_e1 = self.enc1(x)
-        x_c2 = self.conv2(x_e1, c_out.C)
+        x_c2 = self.conv2(x_e1, x.C)
 
-        # this should work!
-        x_c2.set_tensor_stride([4,4,4])
         x_e2 = self.enc2(x_c2)
         
         return x_e2

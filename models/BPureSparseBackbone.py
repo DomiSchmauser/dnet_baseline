@@ -26,7 +26,7 @@ class BPureSparseBackboneCol(nn.Module):
         self.net = net
 
     def forward(self, bdscan):
-        return self.net(bdscan, None, None)#(bdscan.btsdf_geo_sparse, bdscan.btsdf_col_sparse, bdscan.breg_sparse)
+        return self.net(bdscan)#(bdscan.btsdf_geo_sparse, bdscan.btsdf_col_sparse, bdscan.breg_sparse)
     
     def training_step(self, bdscan):
         return self.forward(bdscan)

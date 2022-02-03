@@ -125,7 +125,7 @@ def pcd2occupancy(pcd, max_ext=96):
 
     return occupancy_grid
 
-def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 96, 192], debug_mode=False):
+def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 192, 96], debug_mode=False):
     '''
     coords: sparse coords of voxel occupancy values
     Creates a dense occupancy grid from sparse coords
@@ -155,9 +155,10 @@ def xyz2whl(occupancy_grid, padded_size=None):
     '''
     transfroms a xyz occupancy grid of changing size to fixed size grid of padded size in the format whl
     needs centered padding?
+    Currently one sided padding
     '''
 
-    whl_grid = occupancy_grid.permute(0, 2, 1).contiguous()
+    whl_grid = occupancy_grid
 
     if padded_size is not None:
 
@@ -167,6 +168,23 @@ def xyz2whl(occupancy_grid, padded_size=None):
         whl_grid = np.pad(whl_grid.numpy(), p2d, "constant", constant_values=3 * [(0, 0)])
 
     return torch.from_numpy(whl_grid)
+
+def boxpt2voxel(box_pts, quantization_size):
+
+    '''
+    transform box annotations from corner pts in world space to min max in voxel space
+    '''
+
+    xyz_min = box_pts.min(axis=0)
+    xyz_max = box_pts.max(axis=0)
+    scaling = 1 / quantization_size
+    xyz_min_vox = np.floor(xyz_min * scaling)
+    xyz_max_vox = np.ceil(xyz_max * scaling)
+
+
+    return np.concatenate((xyz_min_vox, xyz_max_vox))
+
+
 
 
 
