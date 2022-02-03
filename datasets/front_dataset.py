@@ -6,14 +6,17 @@ import h5py
 import torch
 import MinkowskiEngine as ME
 import open3d as o3d
+import matplotlib.pyplot as plt
 
 from torch.utils.data import Dataset
 
 sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
-from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel
+from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel, boxpt2voxel
 from utils.pose_utils import backproject_rgb, cam2world, occ2noc
+from utils.net_utils import vg_crop
+from dvis import dvis
 
 class Front_dataset(Dataset):
 
@@ -27,7 +30,8 @@ class Front_dataset(Dataset):
         self.camera_intrinsics = np.array([[292.87803547399, 0, 0], [0, 292.87803547399, 0], [0, 0, 1]])
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.shift_pc = True
-        self.padded_size = [192, 96, 192]
+        self.padded_size = [192, 192, 96] # x y z
+        self.quantization_size = 0.03
         self.debugging_mode = False
 
     def __len__(self):
@@ -69,10 +73,14 @@ class Front_dataset(Dataset):
                 record['pc_offset'] = offset
 
             # Sparse Input
-            record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=0.03)
+            record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=self.quantization_size)
 
             # Dense Input
             record['dense_grid'] = coords2occupancy(record['sparse_coords'], padded_size=self.padded_size, as_padded_whl=True)
+            record['obj_scan_mask'] = torch.clone(record['dense_grid'])
+
+            if self.debugging_mode:
+                dvis(record['dense_grid'], c=0)
 
             # Object level annotations
             for anno in imgs_anns['annotations']:
@@ -84,7 +92,7 @@ class Front_dataset(Dataset):
                         rot_sym = 'c2'
                     else:
                         rot_sym = 'None'
-                    instance_id = anno['id']
+                    instance_id = int(anno['id']) + 2 # shift by 2 to avoid 0 and 1 which represent occupancies
                     jid = anno['jid']
                     cat_name = self.csv_dict[cat_id]
                     voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
@@ -99,6 +107,7 @@ class Front_dataset(Dataset):
                     # Requires according shift of GT 3D location annotations
                     if self.shift_pc:
                         box_3d -= record['pc_offset']
+                        box_3d[box_3d < 0] = 0 # if box is outside frame with some part clip box
                         loc_3d -= record['pc_offset']
 
                     box_3d = boxpt2voxel(box_3d, self.quantization_size)
@@ -118,7 +127,6 @@ class Front_dataset(Dataset):
 
                     # Binvox to noc
                     noc = occ2noc(bin_vox, rot_3d)
-
                     '''
                     # Debugging
                     if self.debugging_mode:
@@ -149,7 +157,7 @@ class Front_dataset(Dataset):
 
             '''
             # Debugging
-            if self.debugging_mode:
+            if self.debugging_mode and idx == 0:
                 pcd = o3d.geometry.PointCloud()
                 pcd.points = o3d.utility.Vector3dVector(record['pc_rgb'][:,:3])
                 nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
