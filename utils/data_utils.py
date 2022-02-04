@@ -109,27 +109,11 @@ def rescale_voxel(unscaled_voxel, scale, debug_mode=False):
 
     return rescale_
 
-def pcd2occupancy(pcd, max_ext=96):
-    '''
-    pcd: in range 0 to max
-    Creates a dense occupancy grid from a Nx3 pointcloud, preserves relative size between x,y,z
-    max_extension is the maximal extension of the final grid
-    '''
-
-    occupancy_grid = np.zeros((max_ext, max_ext, max_ext))
-    max_val= pcd.max()
-    scaling = max_ext / max_val
-    grids_idxs = np.rint(pcd * scaling).astype(int)
-    grids_idxs[grids_idxs > max_ext-1] = max_ext-1 # all values rounded up to max_ext are set to max_ext-1
-    occupancy_grid[grids_idxs] = 1
-
-    return occupancy_grid
-
-def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 96, 192], debug_mode=False):
+def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 192, 96], debug_mode=False):
     '''
     coords: sparse coords of voxel occupancy values
     Creates a dense occupancy grid from sparse coords
-    returns: occupancy grid with shape x,y,z -> for W x H x L switch dim z and y
+    returns: occupancy grid with shape x,y,z -> for W x L x H
     '''
 
     max_extensions = torch.max(coords, dim=0).values + 1
@@ -157,7 +141,7 @@ def xyz2whl(occupancy_grid, padded_size=None):
     needs centered padding?
     '''
 
-    whl_grid = occupancy_grid.permute(0, 2, 1).contiguous()
+    whl_grid = occupancy_grid#.permute(0, 2, 1).contiguous()
 
     if padded_size is not None:
 
@@ -184,3 +168,36 @@ def add_halfheight(location, box):
     location[-1] = half_height  # Center location is at bottom object
 
     return location
+
+def boxpt2voxel(box_pts, quantization_size):
+
+    '''
+    transform box annotations from corner pts in world space to min max in voxel space
+    '''
+
+    xyz_min = box_pts.min(axis=0)
+    xyz_max = box_pts.max(axis=0)
+    scaling = 1 / quantization_size
+    xyz_min_vox = np.floor(xyz_min * scaling)
+    xyz_max_vox = np.ceil(xyz_max * scaling)
+
+    return np.concatenate((xyz_min_vox, xyz_max_vox))
+
+
+'''
+def pcd2occupancy(pcd, max_ext=96):
+    
+    pcd: in range 0 to max
+    Creates a dense occupancy grid from a Nx3 pointcloud, preserves relative size between x,y,z
+    max_extension is the maximal extension of the final grid
+
+
+    occupancy_grid = np.zeros((max_ext, max_ext, max_ext))
+    max_val= pcd.max()
+    scaling = max_ext / max_val
+    grids_idxs = np.rint(pcd * scaling).astype(int)
+    grids_idxs[grids_idxs > max_ext-1] = max_ext-1 # all values rounded up to max_ext are set to max_ext-1
+    occupancy_grid[grids_idxs] = 1
+
+    return occupancy_grid
+'''

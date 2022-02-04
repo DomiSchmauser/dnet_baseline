@@ -191,3 +191,16 @@ def convert_voxel_to_pc(voxel_grid, rot, trans, scale):
 
     return world_pc
 
+def _sparsify(data, th):
+
+    valid_mask = np.abs(data) <= th # signed distance truncated
+
+    coords = np.argwhere(valid_mask)[:, [0, 2, 3, 4]] # mask out coords
+    feats = np.expand_dims(data[valid_mask], 0).T
+    # coords in format B, x y z
+
+    return (
+        torch.from_numpy(feats).float(),
+        torch.from_numpy(coords).int(),
+    )
+

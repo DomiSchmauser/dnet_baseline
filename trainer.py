@@ -18,6 +18,8 @@ from torch.nn import functional as F
 import MinkowskiEngine as ME
 import open3d as o3d
 
+from dvis import dvis
+
 import networks
 import datasets
 
@@ -25,7 +27,7 @@ sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
 from model_cfg import init_cfg
-from utils.train_utils import sec_to_hm_str
+from utils.train_utils import sec_to_hm_str, _sparsify
 from utils.net_utils import vg_crop
 
 # Model import
@@ -239,6 +241,7 @@ class Trainer:
         '''
         One general training step of the whole network pipeline
         '''
+
         total_loss = torch.cuda.FloatTensor([0])
         losses = dict()
         analyses = dict()
@@ -273,7 +276,9 @@ class Trainer:
                     obj_idx = obj['instance_id']
 
                     obj_scan_mask = scan_inst_mask == int(obj_idx)
+                    obj_scan_mask = obj_scan_mask.numpy()
 
+                    '''
                     # NOT SURE IF NECESSARY
                     obj_scan_mask_torch = obj_scan_mask.cuda()
                     obj_scan_mask_torch2 = F.conv3d(
@@ -281,6 +286,7 @@ class Trainer:
                         padding=4
                     )[0][0]
                     obj_scan_mask = (obj_scan_mask_torch2 > 0).cpu().numpy()
+                    '''
 
                     obj_scan_coords = np.argwhere(obj_scan_mask)
 
@@ -313,9 +319,18 @@ class Trainer:
         #coords, feats = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
         dense_features = dense_features[0]
         sparse_features = sparse_features[0]
-        sparse_reg_features = torch.from_numpy(sparse_reg_features[0])
-        sparse_reg_tensor = ME.to_sparse(sparse_reg_features)
-        tester = sparse_reg_features[sparse_reg_features != 0]
+        sparse_reg_features = torch.from_numpy(sparse_reg_features[0]) # B x 7 x W x L x H
+
+        s_coords, _ = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
+
+        # Sparsify reg values and to ME sparse tensor
+        s_coords = s_coords[0]
+        s_reg_feats = sparse_reg_features[0, :, s_coords[:,0].long(), s_coords[:,1].long(), s_coords[:,2].long()]
+        bs_reg_feats = torch.transpose(s_reg_feats, 0, 1)
+        bs_reg_coords = ME.utils.batched_coordinates([s_coords.detach().cpu()])
+        sparse_reg_tensor = ME.SparseTensor(bs_reg_feats.to(self.device),
+                                       bs_reg_coords.to(self.device))
+
         rpn_gt = {}
         rpn_gt['breg_sparse'] = sparse_reg_tensor
 

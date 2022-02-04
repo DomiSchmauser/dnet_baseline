@@ -12,7 +12,7 @@ def occ2noc(voxel_grid, euler_rot):
 
     nonzero_inds = np.nonzero(voxel_grid)[:-1]
 
-    points = nonzero_inds / 31 - 0.5
+    points = nonzero_inds / 31 - 0.5 # norm + center -0.5 to 0.5
     points = points.numpy()
 
     world_pc = rot @ points.transpose()

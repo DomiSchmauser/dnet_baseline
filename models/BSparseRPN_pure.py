@@ -170,9 +170,7 @@ class BSparseRPN_pure(nn.Module):
         pred_coords_l, pred_reg_values_l = bpred_reg_values.decomposed_coordinates_and_features # in sparse tensor format list N x 3, N x 8
         gt_coords_l, gt_reg_values_l = rpn_gt['breg_sparse'].decomposed_coordinates_and_features # gt occupancies N x 7
         for (pred_coords, pred_reg_values, gt_coords, gt_reg_values) in zip(pred_coords_l, pred_reg_values_l, gt_coords_l, gt_reg_values_l):
-            #if pred_coords != gt_coords:
-            #    print("DAFIUQ")
-             
+
             pos_mask = gt_reg_values[:, 0] > 0 # occupancy mask -> 0 # bce loss # occupied
             neg_mask = gt_reg_values[:, 0] == 0
 

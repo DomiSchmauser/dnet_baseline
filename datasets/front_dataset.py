@@ -29,6 +29,8 @@ class Front_dataset(Dataset):
         _, self.csv_dict = read_csv_mapping(mapping_file_path)
         self.camera_intrinsics = np.array([[292.87803547399, 0, 0], [0, 292.87803547399, 0], [0, 0, 1]])
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        # Quantization and sparsify
         self.shift_pc = True
         self.padded_size = [192, 192, 96] # x y z
         self.quantization_size = 0.03
@@ -92,9 +94,10 @@ class Front_dataset(Dataset):
                         rot_sym = 'c2'
                     else:
                         rot_sym = 'None'
-                    instance_id = int(anno['id']) + 2 # shift by 2 to avoid 0 and 1 which represent occupancies
+
+                    instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                     jid = anno['jid']
-                    cat_name = self.csv_dict[cat_id]
+                    #cat_name = self.csv_dict[cat_id]
                     voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
                     box_2d = anno['bbox']
                     segmask = anno['segmentation']
@@ -117,7 +120,7 @@ class Front_dataset(Dataset):
 
                     if self.debugging_mode:
                         dvis(np.expand_dims(box_3d, axis=0), fmt='box')
-                        dvis(cropped_obj, c=1)
+                        #dvis(cropped_obj, c=1)
 
                     cropped_obj[cropped_obj != 0] = instance_id
                     record['obj_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]), int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
@@ -126,7 +129,7 @@ class Front_dataset(Dataset):
                     bin_vox = get_voxel(voxel_path, scale)
 
                     # Binvox to noc
-                    noc = occ2noc(bin_vox, rot_3d)
+                    noc = occ2noc(bin_vox, rot_3d) # as pc
                     '''
                     # Debugging
                     if self.debugging_mode:
