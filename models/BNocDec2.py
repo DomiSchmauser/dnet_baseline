@@ -122,9 +122,6 @@ class BNocDec2(nn.Module):
 
         losses, analyses, _ = self.loss(bx_d0_crops, bbbox_lvl0, bgt_target, bdscan, None)
 
-        # TODO: MERGE WITH VALIDATION FOR BEST ROTATIONS ETC
-        # TODO: Rework full analyses etc logic -> output should contain predicted transformation
-
         bpred_aligned2scans = []
         for B in range(len(bx_d0_crops)):
             pred_aligned2scans = []

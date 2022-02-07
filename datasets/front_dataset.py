@@ -14,7 +14,7 @@ sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
 from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel, boxpt2voxel
-from utils.pose_utils import backproject_rgb, cam2world, occ2noc
+from utils.pose_utils import backproject_rgb, cam2world, occ2noc, discretize_noc, occ2noc2
 from utils.net_utils import vg_crop
 from dvis import dvis
 
@@ -80,6 +80,8 @@ class Front_dataset(Dataset):
             # Dense Input
             record['dense_grid'] = coords2occupancy(record['sparse_coords'], padded_size=self.padded_size, as_padded_whl=True)
             record['obj_scan_mask'] = torch.clone(record['dense_grid'])
+            noc_shape = [3] + list(record['dense_grid'].shape)
+            record['noc_scan_mask'] = torch.zeros(noc_shape)
 
             if self.debugging_mode:
                 dvis(record['dense_grid'], c=0)
@@ -97,6 +99,7 @@ class Front_dataset(Dataset):
 
                     instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                     jid = anno['jid']
+                    #print(jid)
                     #cat_name = self.csv_dict[cat_id]
                     voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
                     box_2d = anno['bbox']
@@ -117,9 +120,10 @@ class Front_dataset(Dataset):
 
                     # Use box 3d and occupancy values to index object scan mask
                     cropped_obj = vg_crop(record['dense_grid'].numpy(), box_3d)
+                    #noc_obj = occ2noc2(cropped_obj, rot_3d)
 
                     if self.debugging_mode:
-                        dvis(np.expand_dims(box_3d, axis=0), fmt='box')
+                        dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
                         #dvis(cropped_obj, c=1)
 
                     cropped_obj[cropped_obj != 0] = instance_id
@@ -128,8 +132,15 @@ class Front_dataset(Dataset):
                     # Load binvox
                     bin_vox = get_voxel(voxel_path, scale)
 
-                    # Binvox to noc
+                    # Binvox to noc, then discretize and scale, finally place in the scene
                     noc = occ2noc(bin_vox, rot_3d) # as pc
+
+                    noc = discretize_noc(noc, box_3d, quantization_size=self.quantization_size)
+
+
+                    record['noc_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]),
+                    int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
+
                     '''
                     # Debugging
                     if self.debugging_mode:

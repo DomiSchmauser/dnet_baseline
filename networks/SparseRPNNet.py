@@ -24,7 +24,6 @@ class SparseRPNNet4_Res1(nn.Module):
             
         )
         
-        
     def forward(self, x):
         # Encode
         x_e1 = self.enc1(x)

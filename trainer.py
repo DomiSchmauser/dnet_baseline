@@ -29,6 +29,7 @@ from baseconfig import CONF
 from model_cfg import init_cfg
 from utils.train_utils import sec_to_hm_str, _sparsify
 from utils.net_utils import vg_crop
+from datasets.sequence_chunking import chunk_sequence
 
 # Model import
 from models.BCompletionDec2 import BCompletionDec2
@@ -246,77 +247,18 @@ class Trainer:
         losses = dict()
         analyses = dict()
 
-        # BATCH INPUT PUT IN COLLATE FUNCTION, currently with chunking -------------------------------------------------
+        assert len(inputs) == 1
 
         for seq in inputs:
+            dense_features, sparse_features, rpn_features = chunk_sequence(seq, chunk_size=1, device=self.device)
 
-            chunk_size = 1
-            occ = []
-            coords = []
-            feats = []
-            sparse_features = []
-            dense_features = []
-            sparse_reg_features = []
+        sparse_reg_features = rpn_features[0]
+        sparse_box_features = rpn_features[1]
+        sparse_obj_features = rpn_features[2]
+        bscan_inst_mask = rpn_features[3]
+        bscan_obj_occs = rpn_features[4]
 
-            for idx, img in enumerate(seq):
-
-                # Sequence Level
-                img_grid = torch.unsqueeze(img['dense_grid'], dim=0)
-                occ.append(img_grid)
-                coords.append(img['sparse_coords'])
-                feats.append(img['sparse_feats'])
-
-                # Object level
-                reg_values = np.zeros([1, 7, img['dense_grid'].shape[0], img['dense_grid'].shape[1], img['dense_grid'].shape[2]])
-                scan_inst_mask = img['obj_scan_mask']
-
-                for obj in img['obj_anns']:
-
-                    box_3d = obj['box_3d']
-                    obj_idx = obj['instance_id']
-
-                    obj_scan_mask = scan_inst_mask == int(obj_idx)
-                    obj_scan_mask = obj_scan_mask.numpy()
-
-                    '''
-                    # NOT SURE IF NECESSARY
-                    obj_scan_mask_torch = obj_scan_mask.cuda()
-                    obj_scan_mask_torch2 = F.conv3d(
-                        obj_scan_mask_torch.float().unsqueeze(0).unsqueeze(0), weight=torch.ones(1, 1, 9, 9, 9).cuda(),
-                        padding=4
-                    )[0][0]
-                    obj_scan_mask = (obj_scan_mask_torch2 > 0).cpu().numpy()
-                    '''
-
-                    obj_scan_coords = np.argwhere(obj_scan_mask)
-
-                    obj_center = (box_3d[3:6] + box_3d[:3]) / 2
-                    obj_size = (box_3d[3:6] - box_3d[:3]) / 2
-
-                    delta_t = obj_center - obj_scan_coords
-                    delta_s = np.ones_like(delta_t) * obj_size
-                    w = 1 - (np.linalg.norm(delta_t / delta_s, axis=1, ord=2) / np.sqrt(3))
-
-                    reg_values[0, :, obj_scan_mask] = np.concatenate([np.expand_dims(w, 1), delta_t, delta_s], 1)
-
-                sparse_reg_features.append(reg_values)
-
-                if (idx+1) % chunk_size == 0:
-                    bcoords = ME.utils.batched_coordinates(coords)
-                    bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
-                    sparse_chunk = ME.SparseTensor(bfeats.to(self.device),
-                                                      bcoords.to(self.device))  # Sparse tensor expects batched data
-                    #dense_chunk = sparse_chunk.dense(min_coordinate=self.min_coords)
-                    dense_chunk = torch.unsqueeze(torch.cat(occ, dim=0), dim=1).to(self.device)
-                    coords = []
-                    feats = []
-                    occ = []
-                    sparse_features.append(sparse_chunk)
-                    dense_features.append(dense_chunk)
-
-        # --------------------------------------------------------------------------------------------------------------
-
-        #coords, feats = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
+        #Todo: Adapt to loop per chunk
         dense_features = dense_features[0]
         sparse_features = sparse_features[0]
         sparse_reg_features = torch.from_numpy(sparse_reg_features[0]) # B x 7 x W x L x H
@@ -333,6 +275,11 @@ class Trainer:
 
         rpn_gt = {}
         rpn_gt['breg_sparse'] = sparse_reg_tensor
+        rpn_gt['scan_shape'] = dense_features.shape[2:]
+        rpn_gt['bboxes'] = torch.from_numpy(np.concatenate(sparse_box_features[0], axis=0)).to(self.device)
+        rpn_gt['bobj_idxs'] = sparse_obj_features[0]
+        rpn_gt['bscan_inst_mask'] = bscan_inst_mask
+
 
         # Dense Pipeline ----------------------------------------------------------------------------------------------
         x_e1, x_e2, x_d2 = self.backbone.training_step(dense_features)  # enc_layer_1, enc_layer_2, dec_layer_2
@@ -348,9 +295,9 @@ class Trainer:
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
         btarget_noc = []
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
-            inst_crops = vg_crop(bdscan.bscan_inst_mask[B], bbox_lvl0) # BSCAN INST MASK IN 3D? or just box and crop unoccupied
+            inst_crops = vg_crop(bscan_inst_mask[B], bbox_lvl0) # BSCAN INST MASK IN 3D? or just box and crop unoccupied
 
-            target_num_occs = [(torch.abs(bdscan.bobjects[B][obj_idx].sdf) < 2).sum() for obj_idx in gt_target]
+            target_num_occs = [(bscan_obj_occs[B][str(obj_idx)] != 0).sum() for obj_idx in gt_target] # number of occupancies per object
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
                                 zip(gt_target, inst_crops)]
             valid_inst_occ_target = []
@@ -378,14 +325,14 @@ class Trainer:
 
         # Completion
         completion_output, completion_losses, completion_analyses, completion_timings = self.completion.training_step(
-            x_d2, x_e2, x_e1, bdscan, bbbox_lvl0_compl_s, bgt_target_compl
+            x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0_compl_s, bgt_target_compl
         )
         losses["completion"] = completion_losses
         total_loss += torch.mean(torch.cat(completion_losses["bweighted_loss"], 0))
 
         # Nocs
         noc_output, noc_losses, noc_analyses, noc_timings = self.noc.training_step(
-            x_d2, x_e2, x_e1, bdscan, bbbox_lvl0_compl_s, bgt_target_compl
+            x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0_compl_s, bgt_target_compl
         )
         losses["noc"] = noc_losses
         analyses["noc"] = noc_analyses

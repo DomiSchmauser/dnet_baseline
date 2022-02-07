@@ -48,14 +48,14 @@ class BSparseRPN_pure(nn.Module):
        
         return (bpred_bboxes, bgt_target, brpn_conf)
     
-    def _to_bboxes(self, bpred_reg_values, bdscan, min_conf, max_proposals):
+    def _to_bboxes(self, bpred_reg_values, rpn_gt, min_conf, max_proposals):
         # bdscan only used to get gt_targets
         bpred_bboxes = []
         brpn_conf = []
         bgt_target = []
 
         pred_coords_l, pred_reg_values_l = bpred_reg_values.decomposed_coordinates_and_features
-        # dvis(bdscan.breg_sparse.C[bdscan.breg_sparse.F[:,0]>0,1:] + bdscan.breg_sparse.F[bdscan.breg_sparse.F[:,0]>0,1:4].cpu())
+        #dvis(rpn_gt.breg_sparse.C[rpn_gt.breg_sparse.F[:,0]>0,1:] + rpn_gt.breg_sparse.F[rpn_gt.breg_sparse.F[:,0]>0,1:4].cpu())
         for B,(pred_coords, pred_reg_values) in enumerate(zip(pred_coords_l, pred_reg_values_l)):
             
             pred_logits = pred_reg_values[:,0:2]
@@ -102,9 +102,9 @@ class BSparseRPN_pure(nn.Module):
             pred_bboxes = torch.clamp(torch.cat([pred_bbox_centers - pred_bbox_sizes, pred_bbox_centers + pred_bbox_sizes], 1).round().int(), 0)
             #pred_bboxes[3:6] = torch.min(pred_bboxes[3:6], torch.Tensor([192, 96, 192]).cuda(), dim=1)
             #pred_bboxes[:, 3] = torch.clamp(pred_bboxes[:, 3],)
-            pred_bboxes[:, 3] = torch.clamp(pred_bboxes[:, 3], max=bdscan.bscan_shape[B][0]-1)
-            pred_bboxes[:, 4] = torch.clamp(pred_bboxes[:, 4], max=bdscan.bscan_shape[B][1]-1)
-            pred_bboxes[:, 5] = torch.clamp(pred_bboxes[:, 5], max=bdscan.bscan_shape[B][2]-1)
+            pred_bboxes[:, 3] = torch.clamp(pred_bboxes[:, 3], max=rpn_gt['scan_shape'][0]-1) # x max
+            pred_bboxes[:, 4] = torch.clamp(pred_bboxes[:, 4], max=rpn_gt['scan_shape'][1]-1) # y max
+            pred_bboxes[:, 5] = torch.clamp(pred_bboxes[:, 5], max=rpn_gt['scan_shape'][2]-1) # z max in voxel coords
 
             # easy lazy: TODO IMPROVE CLUSTERING (here later centroids collide)
             nms_filtered = nms3d(pred_bboxes.float(), pred_confs, 0.4)
@@ -116,7 +116,7 @@ class BSparseRPN_pure(nn.Module):
             #if min_size_filter.sum() == 0:
             #    min_size_filter[0] = True
 
-
+            # Breaks at size predicted boxes
             pred_bboxes = pred_bboxes[min_size_filter]
             pred_confs = pred_confs[min_size_filter]
 
@@ -131,12 +131,11 @@ class BSparseRPN_pure(nn.Module):
             brpn_conf.append(pred_conf)
 
             # find matching gt
-            if len(bdscan.bbboxes) > 0:
-                overlaps = bbox_overlaps(pred_bboxes.float(), bdscan.bbboxes[B].float())
+            if len(rpn_gt['bboxes']) > 0: # List with all bboxes in the scan
+                overlaps = bbox_overlaps(pred_bboxes.float(), rpn_gt['bboxes'].float())
                 if len(overlaps) >0:
-                    gt_target = [bdscan.bobj_inds[B][i] for i in torch.argmax(overlaps, 1)]
+                    gt_target = [rpn_gt['bobj_idxs'][i] for i in torch.argmax(overlaps, 1)]
                 else:
-                    #TODO IS THIS CORRECT???
                     gt_target = []
             else:
                 gt_target = len(pred_bboxes)*[0]
@@ -148,13 +147,11 @@ class BSparseRPN_pure(nn.Module):
         
 
     def training_step(self, x_e2: torch.Tensor, rpn_gt):
-        #with Timer('forward'):
+
         bpred_reg_values = self.forward(x_e2) # num occ x 8 featuredim
-        #with Timer('loss'):
         losses = self.loss(bpred_reg_values, rpn_gt)
-        #with Timer('to bboxes'):
         bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, rpn_gt, self.conf['min_conf_train'], self.conf['max_proposals_train'])
-        # bdscan.bbboxes ~ bpred_bboxes
+
         return (bpred_bboxes, bgt_target, brpn_conf), losses, {}, {}
 
 
@@ -178,8 +175,6 @@ class BSparseRPN_pure(nn.Module):
 
             if (pos_mask).sum() == 0:
                 import pdb
-                print(bdscan.bseq_name)
-                print(bdscan.bscan_idx)
                 pdb.set_trace()
 
             # center coord, extent x,y,z similar to votenet

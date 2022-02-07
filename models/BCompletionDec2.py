@@ -51,25 +51,25 @@ class BCompletionDec2(nn.Module):
         pred_compl = [[x_d0_crop > 0.0 for x_d0_crop in x_d0_crops] for x_d0_crops in bx_d0_crops]
         return pred_compl
 
-    def training_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bdscan, bbbox_lvl0: List, bgt_target: List):
+    def training_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List):
         if self.gt_augm:
-            bgt_bbox, bgt_obj_inds = bdscan.bbboxes, bdscan.bobj_inds
+            bgt_bbox, bgt_obj_inds = rpn_gt['bbboxes'], rpn_gt['bobj_idxs']
             bbbox_lvl0 =  [cats(bbox_lvl0, gt_bbox,0)  for bbox_lvl0, gt_bbox in zip(bbbox_lvl0, bgt_bbox)]   
             bgt_target =  [gt_target + gt_obj_inds  for gt_target, gt_obj_inds in zip(bgt_target, bgt_obj_inds)]
         
         bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
 
-        losses = self.loss(bx_d0_crops, bbbox_lvl0, bgt_target, bdscan)
+        losses = self.loss(bx_d0_crops, bbbox_lvl0, bgt_target, rpn_gt)
 
         return bx_d0_crops, losses, {}, {}
 
     
 
-    def loss(self, bx_d0_crops, bbbox_lvl0: List, bgt_target: List, bdscan):
+    def loss(self, bx_d0_crops, bbbox_lvl0: List, bgt_target: List, rpn_gt):
         bcompl_loss = []
         bweighted_loss = []
         for B in range(len(bbbox_lvl0)):
-            scan_inst_mask_crops = vg_crop(bdscan.bscan_inst_mask[B:B+1], bbbox_lvl0[B])
+            scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B:B+1], bbbox_lvl0[B])
             scan_compl_crops = [(scan_inst_mask_crop == int(bgt_target[B][i])).float() for i,scan_inst_mask_crop in enumerate(scan_inst_mask_crops)]
             
             # debugging
