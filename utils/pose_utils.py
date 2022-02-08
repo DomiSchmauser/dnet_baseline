@@ -1,37 +1,47 @@
 import numpy as np
 import open3d as o3d
 import mathutils
+import MinkowskiEngine as ME
+import torch
+
 from sklearn.preprocessing import minmax_scale
+from dvis import dvis
 
-def occ2noc2(voxel_grid, euler_rot):
+def occ2noc(cropped_obj, box_3d, euler_rot):
     '''
-    Calculate nocs map from occupancy grid and 3D rot
-    Carefull CAD space is moved up in z axis when rotation for nocs space might result in an issue
+    Get occ coords of a cropped object, transform to noc space
     '''
-
     euler = mathutils.Euler(euler_rot)
     rot = np.array(euler.to_matrix())
 
-    shape = voxel_grid.shape
-    max_dim = np.array(shape).max() - 1 # idx starts at 0
+    xyz_min = box_3d[:3]
+    crop_idxs = np.nonzero(cropped_obj)
+    occ_idxs = np.vstack((crop_idxs[0], crop_idxs[1], crop_idxs[2])).T + xyz_min.astype(np.int)
 
-    nonzero_inds = np.nonzero(voxel_grid)
+    # World to CAD rotation
+    world2cad = (np.linalg.inv(rot) @ occ_idxs.T).T
 
-    points = nonzero_inds / max_dim  # norm 0 - 1
-    points = points.numpy()
+    # To NOC space transform
+    x_min, x_max = world2cad[:,0].min(), world2cad[:,0].max()
+    y_min, y_max = world2cad[:,1].min(), world2cad[:,1].max()
+    z_min, z_max = world2cad[:,2].min(), world2cad[:,2].max()
+    max_range = np.array([x_max-x_min, y_max-y_min, z_max-z_min]).max()
 
+    x_noc = (world2cad[:,0] - ((x_max + x_min) / 2)) / max_range + 0.5
+    y_noc = (world2cad[:,1] - ((y_max + y_min) / 2)) / max_range + 0.5
+    z_noc = (world2cad[:,2] - ((z_max + z_min) / 2)) / max_range + 0.5
 
+    noc = np.vstack((x_noc, y_noc, z_noc))
 
-    world_pc = rot @ points.transpose()
-    world_pc = world_pc.transpose()
+    noc_obj = np.zeros((3, cropped_obj.shape[0], cropped_obj.shape[1], cropped_obj.shape[2]))
+    noc_obj[:, crop_idxs[0], crop_idxs[1], crop_idxs[2]] = noc
 
-    return world_pc
+    return noc_obj
 
-def occ2noc(voxel_grid, euler_rot):
+def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03):
     '''
     Calculate nocs map from occupancy grid and 3D rot
     euler rotation: CAD2World space in Blender coord space
-    '''
 
     def center(points):
         x_range = points[:,0].max() - points[:,0].min()
@@ -39,11 +49,14 @@ def occ2noc(voxel_grid, euler_rot):
         z_range = points[:,2].max() - points[:,2].min()
         ranges = np.array([x_range, y_range, z_range])
         return points - ranges/2
+    '''
 
     euler = mathutils.Euler(euler_rot)
     rot = np.array(euler.to_matrix())
 
     nonzero_inds = np.nonzero(voxel_grid)[:-1]
+
+    max_idx = torch.max(nonzero_inds)
 
     points = nonzero_inds / 31 - 0.5
     points = points.numpy()
@@ -56,32 +69,29 @@ def occ2noc(voxel_grid, euler_rot):
     o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
     '''
 
-    noc_pc = rot @ points.transpose()
-    noc_pc = noc_pc.transpose() + 0.5 # NOC space
+    # CAD to world
+    world_pc = rot @ points.transpose() + np.expand_dims(translation, axis=-1)
+    world_pc = world_pc.transpose() # world space
 
-    return noc_pc
+    # Discretize
+    coords = ME.utils.sparse_quantize(torch.from_numpy(world_pc).contiguous(memory_format=torch.contiguous_format) , features=None,
+                             quantization_size=quantization_size)
 
-def discretize_noc(noc_pts, bbox, quantization_size=0.03):
-    '''
-    Discretize nocs pointcloud and squash between object box coordinates
-    Maybe issue since box is axis aligned
-    '''
-
-    scaling = 1 / quantization_size
     x_min, x_max = bbox[0], bbox[3]
     y_min, y_max = bbox[1], bbox[4]
     z_min, z_max = bbox[2], bbox[5]
 
-    noc_discretized = np.rint(noc_pts * scaling)
-    x_scaled = minmax_scale(noc_discretized[:,0], feature_range=(x_min, x_max))
-    y_scaled = minmax_scale(noc_discretized[:,1], feature_range=(y_min, y_max))
-    z_scaled = minmax_scale(noc_discretized[:,2], feature_range=(z_min, z_max))
+    x_scaled = minmax_scale(coords[:, 0], feature_range=(x_min, x_max))
+    y_scaled = minmax_scale(coords[:, 1], feature_range=(y_min, y_max))
+    z_scaled = minmax_scale(coords[:, 2], feature_range=(z_min, z_max))
 
-    noc_discretized = np.array([x_scaled, y_scaled, z_scaled]).T
-    test = noc_discretized
+    noc_discretized = np.rint(np.array([x_scaled, y_scaled, z_scaled]).T)
 
-    return noc_discretized
 
+    #dvis(np.expand_dims(bbox, axis=0), fmt='box', c=1)
+    #dvis(noc_discretized)
+
+    return world_pc
 
 
 def backproject_rgb(rgb, depth, intrinsics, debug_mode=False):

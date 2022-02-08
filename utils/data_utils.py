@@ -133,7 +133,7 @@ def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 192, 96], deb
     if as_padded_whl:
         occupancy_grid = xyz2whl(occupancy_grid, padded_size=padded_size)
 
-    return occupancy_grid
+    return occupancy_grid, max_extensions.tolist()
 
 def xyz2whl(occupancy_grid, padded_size=None):
     '''

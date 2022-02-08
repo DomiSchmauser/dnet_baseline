@@ -14,7 +14,7 @@ sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
 from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel, boxpt2voxel
-from utils.pose_utils import backproject_rgb, cam2world, occ2noc, discretize_noc, occ2noc2
+from utils.pose_utils import backproject_rgb, cam2world, occ2world, occ2noc
 from utils.net_utils import vg_crop
 from dvis import dvis
 
@@ -78,8 +78,9 @@ class Front_dataset(Dataset):
             record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=self.quantization_size)
 
             # Dense Input
-            record['dense_grid'] = coords2occupancy(record['sparse_coords'], padded_size=self.padded_size, as_padded_whl=True)
+            record['dense_grid'], max_ext = coords2occupancy(record['sparse_coords'], padded_size=self.padded_size, as_padded_whl=True)
             record['obj_scan_mask'] = torch.clone(record['dense_grid'])
+
             noc_shape = [3] + list(record['dense_grid'].shape)
             record['noc_scan_mask'] = torch.zeros(noc_shape)
 
@@ -118,37 +119,33 @@ class Front_dataset(Dataset):
 
                     box_3d = boxpt2voxel(box_3d, self.quantization_size)
 
+                    '''
+                    # Crop box to frame grid size
+                    box_3d[3] = np.clip(box_3d[3], 0, max_ext[0])
+                    box_3d[4] = np.clip(box_3d[4], 0, max_ext[1])
+                    box_3d[5] = np.clip(box_3d[5], 0, max_ext[2])
+                    '''
+
+                    # Binvox to world, then discretize and scale, finally place in the scene
+                    bin_vox = get_voxel(voxel_path, scale)
+                    discrete_obj = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size)
+
                     # Use box 3d and occupancy values to index object scan mask
                     cropped_obj = vg_crop(record['dense_grid'].numpy(), box_3d)
-                    #noc_obj = occ2noc2(cropped_obj, rot_3d)
+
+                    # Nocs coords mask
+                    noc_obj = occ2noc(cropped_obj, box_3d, rot_3d)
+                    record['noc_scan_mask'][:, int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]),
+                    int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(noc_obj)
+
+                    # Instance id mask
+                    cropped_obj[cropped_obj != 0] = instance_id
+                    record['obj_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]),
+                    int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
 
                     if self.debugging_mode:
                         dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
-                        #dvis(cropped_obj, c=1)
-
-                    cropped_obj[cropped_obj != 0] = instance_id
-                    record['obj_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]), int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
-
-                    # Load binvox
-                    bin_vox = get_voxel(voxel_path, scale)
-
-                    # Binvox to noc, then discretize and scale, finally place in the scene
-                    noc = occ2noc(bin_vox, rot_3d) # as pc
-
-                    noc = discretize_noc(noc, box_3d, quantization_size=self.quantization_size)
-
-
-                    record['noc_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]),
-                    int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
-
-                    '''
-                    # Debugging
-                    if self.debugging_mode:
-                        nocs_pcd = o3d.geometry.PointCloud()
-                        nocs_pcd.points = o3d.utility.Vector3dVector(noc)
-                        nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
-                        o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
-                    '''
+                        dvis(cropped_obj, c=1)
 
                     obj = {
                         'category_id': cat_id,
@@ -161,7 +158,7 @@ class Front_dataset(Dataset):
                         'rot': rot_3d,
                         'loc': loc_3d,
                         'rot_sym': rot_sym,
-                        'noc': noc,
+                        #'noc': noc,
                         'voxel': bin_vox,
                     }
                     obj_anns.append(obj)

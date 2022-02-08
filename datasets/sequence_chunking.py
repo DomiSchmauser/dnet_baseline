@@ -22,7 +22,7 @@ def chunk_sequence(seq, chunk_size=1, device=None):
     sparse_obj_features = []
     sparse_box_features = []
     bscan_inst_mask = []
-    bscan_obj_occ = []
+    bscan_obj = []
 
     for idx, img in enumerate(seq):
 
@@ -37,7 +37,7 @@ def chunk_sequence(seq, chunk_size=1, device=None):
         scan_inst_mask = img['obj_scan_mask']
         bboxes = []
         obj_idxs = []
-        obj_occs = {}
+        obj_feats = {}
 
         for obj in img['obj_anns']:
 
@@ -46,8 +46,11 @@ def chunk_sequence(seq, chunk_size=1, device=None):
 
             obj_scan_mask = scan_inst_mask == int(obj_idx)
             obj_scan_mask = obj_scan_mask.numpy()
-            #Todo add asser obj idx only once in dict
-            obj_occs[str(obj_idx)] = obj_scan_mask.sum() # counts True elements in scan
+            #Todo add assert obj idx only once in dict
+            obj_feats[str(obj_idx)] = {}
+            obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()# counts True elements in scan
+            obj_feats[str(obj_idx)]['noc2scan'] = obj['rot']
+            obj_feats[str(obj_idx)]['rot_sym'] =  obj['rot_sym']
 
             '''
             # NOT SURE IF NECESSARY
@@ -77,7 +80,7 @@ def chunk_sequence(seq, chunk_size=1, device=None):
         sparse_box_features.append(bboxes)
         sparse_obj_features.append(obj_idxs)
         bscan_inst_mask.append(scan_inst_mask)
-        bscan_obj_occ.append(obj_occs)
+        bscan_obj.append(obj_feats)
 
         if (idx+1) % chunk_size == 0:
             bcoords = ME.utils.batched_coordinates(coords)
@@ -91,4 +94,4 @@ def chunk_sequence(seq, chunk_size=1, device=None):
             feats = []
             occ = []
 
-    return dense_features, sparse_features, (sparse_reg_features, sparse_box_features, sparse_obj_features, bscan_inst_mask, bscan_obj_occ)
+    return dense_features, sparse_features, (sparse_reg_features, sparse_box_features, sparse_obj_features, bscan_inst_mask, bscan_obj)

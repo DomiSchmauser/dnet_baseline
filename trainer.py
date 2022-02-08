@@ -248,6 +248,8 @@ class Trainer:
         analyses = dict()
 
         assert len(inputs) == 1
+        ## Avoid memory breakdown
+        inputs = inputs[:5]
 
         for seq in inputs:
             dense_features, sparse_features, rpn_features = chunk_sequence(seq, chunk_size=1, device=self.device)
@@ -256,7 +258,7 @@ class Trainer:
         sparse_box_features = rpn_features[1]
         sparse_obj_features = rpn_features[2]
         bscan_inst_mask = rpn_features[3]
-        bscan_obj_occs = rpn_features[4]
+        bscan_obj = rpn_features[4]
 
         #Todo: Adapt to loop per chunk
         dense_features = dense_features[0]
@@ -279,6 +281,7 @@ class Trainer:
         rpn_gt['bboxes'] = torch.from_numpy(np.concatenate(sparse_box_features[0], axis=0)).to(self.device)
         rpn_gt['bobj_idxs'] = sparse_obj_features[0]
         rpn_gt['bscan_inst_mask'] = bscan_inst_mask
+        rpn_gt['bscan_nocs'] = None
 
 
         # Dense Pipeline ----------------------------------------------------------------------------------------------
@@ -297,7 +300,7 @@ class Trainer:
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
             inst_crops = vg_crop(bscan_inst_mask[B], bbox_lvl0) # BSCAN INST MASK IN 3D? or just box and crop unoccupied
 
-            target_num_occs = [(bscan_obj_occs[B][str(obj_idx)] != 0).sum() for obj_idx in gt_target] # number of occupancies per object
+            target_num_occs = [(bscan_obj[B][str(obj_idx)]['num_occ'] != 0).sum() for obj_idx in gt_target] # number of occupancies per object
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
                                 zip(gt_target, inst_crops)]
             valid_inst_occ_target = []
@@ -315,11 +318,13 @@ class Trainer:
             bbbox_lvl0_compl.append(valid_bbox_lvl0)
             bgt_target_compl.append(valid_gt_target_compl)
 
+            ''' NOT USED IN THE CODE
             target_noc = []
             if len(valid_bbox_lvl0) > 0:
                 for bbox in valid_bbox_lvl0:
                     target_noc.append(vg_crop(bdscan.bscan_noc[B], bbox))
             btarget_noc.append(target_noc)
+            '''
 
         bbbox_lvl0_compl_s = [torch.stack(bboxes, 0) if len(bboxes) > 0 else [] for bboxes in bbbox_lvl0_compl]
 
@@ -332,7 +337,7 @@ class Trainer:
 
         # Nocs
         noc_output, noc_losses, noc_analyses, noc_timings = self.noc.training_step(
-            x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0_compl_s, bgt_target_compl
+            x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0_compl_s, bgt_target_compl, bscan_obj
         )
         losses["noc"] = noc_losses
         analyses["noc"] = noc_analyses
