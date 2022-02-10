@@ -44,12 +44,12 @@ class BNocDec2(nn.Module):
         return bx_d0_crops
 
 
-    def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bdscan, bbbox_lvl0: List, bgt_target: List, binst_occ=None):
+    def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List, binst_occ=None):
         if not all([len(bbox_lvl0)>0 for bbox_lvl0 in bbbox_lvl0]):
             return [[]], {'bweighted_loss': [torch.Tensor([0.0]).cuda()], 'bnoc_gt_inst_loss': [torch.Tensor([0.0]).cuda()], 'brot_gt_inst_loss': [torch.Tensor([0.0]).cuda()]}, {}, {}
 
         bnocs = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
-        losses, analyses, bbest_rot_angles_y = self.loss(bnocs, bbbox_lvl0, bgt_target, bdscan, binst_occ)
+        losses, analyses, bbest_rot_angles_y = self.loss(bnocs, bbbox_lvl0, bgt_target, rpn_gt, binst_occ)
 
         #
         bbest_rots = [[angle_axis_to_rotation_matrix(torch.Tensor([[0, - best_rot_angle_y , 0]]))[0,:3,:3].cuda() for best_rot_angle_y in best_rot_angles_y] for best_rot_angles_y in  bbest_rot_angles_y]

@@ -70,6 +70,7 @@ class Front_dataset(Dataset):
             cam_rgb_pc = backproject_rgb(record["rgb"], record["depth_map"], self.camera_intrinsics)
             record["pc_rgb"] = cam2world(cam_rgb_pc, record['campose'])
 
+            # Shift scene origin to (0,0,0)
             if self.shift_pc:
                 offset = record['pc_rgb'][:,:3].min(axis=0)
                 record['pc_rgb'][:,:3] -= offset
@@ -101,8 +102,6 @@ class Front_dataset(Dataset):
 
                     instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                     jid = anno['jid']
-                    #print(jid)
-                    #cat_name = self.csv_dict[cat_id]
                     voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
                     box_2d = anno['bbox']
                     segmask = anno['segmentation']
@@ -119,13 +118,7 @@ class Front_dataset(Dataset):
                         loc_3d -= record['pc_offset']
 
                     box_3d = boxpt2voxel(box_3d, self.quantization_size)
-
-                    '''
-                    # Crop box to frame grid size
-                    box_3d[3] = np.clip(box_3d[3], 0, max_ext[0])
-                    box_3d[4] = np.clip(box_3d[4], 0, max_ext[1])
-                    box_3d[5] = np.clip(box_3d[5], 0, max_ext[2])
-                    '''
+                    loc_3d *= (1/self.quantization_size) #absolute to discrete space
 
                     # Binvox to world, then discretize and scale, finally place in the scene
                     bin_vox = get_voxel(voxel_path, scale)
@@ -155,41 +148,45 @@ class Front_dataset(Dataset):
                     obj = {
                         'category_id': cat_id,
                         'instance_id': instance_id,
-                        'voxel_path': voxel_path,
-                        'box_2d': box_2d,
                         'box_3d': box_3d,
-                        'segmask': segmask,
                         'scale': scale,
                         'rot': rot_3d,
                         'loc': loc_3d,
                         'noc2scan': noc2scan,
                         'cad2noc': cad2noc,
                         'rot_sym': rot_sym,
-                        #'noc': noc,
-                        'voxel': bin_vox,
                     }
                     obj_anns.append(obj)
 
             record['obj_anns'] = obj_anns
+
+            # Remove not used entries
+            del record['rgb'], record['pc_rgb'], record['depth_map']
             img_dict.append(record)
 
-            '''
-            # Debugging
-            if self.debugging_mode and idx == 0:
-                pcd = o3d.geometry.PointCloud()
-                pcd.points = o3d.utility.Vector3dVector(record['pc_rgb'][:,:3])
-                nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
-                boxes = []
-                for ann in obj_anns:
-                    vis_box = o3d.geometry.OrientedBoundingBox()
-                    vis_box = vis_box.create_from_points(o3d.utility.Vector3dVector(ann['box_3d']))
-                    boxes.append(vis_box)
-                boxes.append(pcd)
-                boxes.append(nocs_origin)
-                o3d.visualization.draw_geometries(boxes)
-            '''
 
         return img_dict
 
 
+    '''
+    # Debugging
+    if self.debugging_mode and idx == 0:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(record['pc_rgb'][:,:3])
+        nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+        boxes = []
+        for ann in obj_anns:
+            vis_box = o3d.geometry.OrientedBoundingBox()
+            vis_box = vis_box.create_from_points(o3d.utility.Vector3dVector(ann['box_3d']))
+            boxes.append(vis_box)
+        boxes.append(pcd)
+        boxes.append(nocs_origin)
+        o3d.visualization.draw_geometries(boxes)
+    '''
 
+    '''
+    # Crop box to frame grid size
+    box_3d[3] = np.clip(box_3d[3], 0, max_ext[0])
+    box_3d[4] = np.clip(box_3d[4], 0, max_ext[1])
+    box_3d[5] = np.clip(box_3d[5], 0, max_ext[2])
+    '''

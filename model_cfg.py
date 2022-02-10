@@ -34,6 +34,7 @@ def init_cfg():
                 'noc': 1.0,
                 'rot': 0.05,
                 'transl': 0.01,
+                'scale': 0.01,
             },
             'noc_samples': 300,
         },

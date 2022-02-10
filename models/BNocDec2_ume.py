@@ -22,17 +22,17 @@ from dvis import dvis
 
 
 class BNocDec2_ume(nn.Module):
-    def __init__(self, conf):
+    def __init__(self, conf, net):
         super().__init__()
-        self.net = import_cls("nets", conf.net.name)(conf.net)
-        self.bbox_shape = np.array(conf.net.bbox_shape)
-        self.gt_augm = conf.gt_augm
+        self.net = net
+        self.bbox_shape = np.array(conf['bbox_shape'])
+        self.gt_augm = conf['gt_augm']
         self.crit = nn.L1Loss().cuda()
-        self.noc_weight = conf.weights.noc
-        self.rot_weight = conf.weights.rot
-        self.transl_weight = conf.weights.transl
-        self.scale_weight = conf.weights.scale
-        self.noc_samples = conf.noc_samples
+        self.noc_weight = conf['weights']['noc']
+        self.rot_weight = conf['weights']['rot']
+        self.transl_weight = conf['weights']['transl']
+        self.scale_weight = conf['weights']['scale']
+        self.noc_samples = conf['noc_samples']
 
     def forward(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bbbox_lvl0: List):
 
@@ -72,7 +72,7 @@ class BNocDec2_ume(nn.Module):
         return bx_d0_crops
 
     def infer_step(
-        self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bdscan: BDScan, bbbox_lvl0: List, binst_occ=None,
+        self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, binst_occ=None,
     ):
 
         bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)

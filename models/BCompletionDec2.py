@@ -34,17 +34,18 @@ class BCompletionDec2(nn.Module):
             if len(bbox_lvl0.shape) == 1:
                 crop_size = tuple(bbox_lvl0[3:6].to(torch.int) - bbox_lvl0[:3].to(torch.int))
 
+            # Interpolate to match size of bounding box
             x_d0_crops = [F.interpolate(x_d0_batch_crops[i:i + 1], size=crop_size, mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
             
             bx_d0_crops.append(x_d0_crops)
         return bx_d0_crops
         
     
-    def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bdscan, bbbox_lvl0: List, bgt_target: List):
+    def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List):
         if not all([len(bbox_lvl0)>0 for bbox_lvl0 in bbbox_lvl0]):
             return [[]], {'bweighted_loss': [torch.Tensor([0.0]).cuda()], 'bcompl_loss': [torch.Tensor([0.0]).cuda()]}, {}, {}
         bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
-        losses = self.loss(bx_d0_crops, bbbox_lvl0, bgt_target, bdscan)
+        losses = self.loss(bx_d0_crops, bbbox_lvl0, bgt_target, rpn_gt)
         pred_compl = [[x_d0_crop > 0.0 for x_d0_crop in x_d0_crops] for x_d0_crops in bx_d0_crops]
         return pred_compl, losses, {}, {}
     
@@ -74,7 +75,11 @@ class BCompletionDec2(nn.Module):
         bcompl_loss = []
         bweighted_loss = []
         for B in range(len(bbbox_lvl0)):
+
+            # Get occupancy values
             scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbbox_lvl0[B]) # Unsqueeze for loop later
+
+            # Could also just insert 1 for values > than 0
             scan_compl_crops = [(scan_inst_mask_crop == int(bgt_target[B][i])).float() for i,scan_inst_mask_crop in enumerate(scan_inst_mask_crops)]
             
             # debugging

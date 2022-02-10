@@ -30,20 +30,20 @@ class BSparseRPN_pure(nn.Module):
         return bpred_reg_values
         
     
-    def validation_step(self, x_e2: torch.Tensor, bdscan):
+    def validation_step(self, x_e2: torch.Tensor, rpn_gt):
         bpred_reg_values = self.forward(x_e2)
 
-        losses = self.loss(bpred_reg_values, bdscan)
+        losses = self.loss(bpred_reg_values, rpn_gt)
 
-        bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, bdscan, self.conf['min_conf_test'], self.conf['max_proposals_test'])
+        bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, rpn_gt, self.conf['min_conf_test'], self.conf['max_proposals_test'])
         # bdscan.bbboxes ~ bpred_bboxes
        
         return (bpred_bboxes, bgt_target, brpn_conf), losses, {}, {}
     
-    def infer_step(self, x_e2: torch.Tensor, bdscan):
+    def infer_step(self, x_e2: torch.Tensor, rpn_gt):
         bpred_reg_values = self.forward(x_e2)
 
-        bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, bdscan, self.conf['min_conf_test'], self.conf['max_proposals_test'])
+        bpred_bboxes, bgt_target, brpn_conf = self._to_bboxes(bpred_reg_values, rpn_gt, self.conf['min_conf_test'], self.conf['max_proposals_test'])
         # bdscan.bbboxes ~ bpred_bboxes
        
         return (bpred_bboxes, bgt_target, brpn_conf)
@@ -55,9 +55,9 @@ class BSparseRPN_pure(nn.Module):
         bgt_target = []
 
         pred_coords_l, pred_reg_values_l = bpred_reg_values.decomposed_coordinates_and_features
-        #dvis(rpn_gt.breg_sparse.C[rpn_gt.breg_sparse.F[:,0]>0,1:] + rpn_gt.breg_sparse.F[rpn_gt.breg_sparse.F[:,0]>0,1:4].cpu())
         for B,(pred_coords, pred_reg_values) in enumerate(zip(pred_coords_l, pred_reg_values_l)):
-            
+
+            # Objectness score
             pred_logits = pred_reg_values[:,0:2]
             pred_conf = F.softmax(pred_logits, 1)[:, 1]
             conf_mask = pred_conf >= min(min_conf, pred_conf.max())
@@ -73,8 +73,7 @@ class BSparseRPN_pure(nn.Module):
             fps_indices = fps(pred_center, fps_batch, min(0.99, max_proposals / len(pred_center)))
             # merge fps points if spatially close
             pairwise_dist_fps = torch.cdist(pred_center[fps_indices].unsqueeze(0), pred_center[fps_indices].unsqueeze(0))[0]
-            
-            
+
             pairwise_close = pairwise_dist_fps < np.sqrt(200)
             centroid_clusters = []
             joint_ids = []
@@ -100,21 +99,15 @@ class BSparseRPN_pure(nn.Module):
             pred_confs = torch.stack([torch.mean(pred_conf[clusters[i]], 0) for i in range(len(clusters))])
 
             pred_bboxes = torch.clamp(torch.cat([pred_bbox_centers - pred_bbox_sizes, pred_bbox_centers + pred_bbox_sizes], 1).round().int(), 0)
-            #pred_bboxes[3:6] = torch.min(pred_bboxes[3:6], torch.Tensor([192, 96, 192]).cuda(), dim=1)
-            #pred_bboxes[:, 3] = torch.clamp(pred_bboxes[:, 3],)
             pred_bboxes[:, 3] = torch.clamp(pred_bboxes[:, 3], max=rpn_gt['scan_shape'][0]-1) # x max
             pred_bboxes[:, 4] = torch.clamp(pred_bboxes[:, 4], max=rpn_gt['scan_shape'][1]-1) # y max
             pred_bboxes[:, 5] = torch.clamp(pred_bboxes[:, 5], max=rpn_gt['scan_shape'][2]-1) # z max in voxel coords
 
-            # easy lazy: TODO IMPROVE CLUSTERING (here later centroids collide)
             nms_filtered = nms3d(pred_bboxes.float(), pred_confs, 0.4)
             pred_bboxes = pred_bboxes[nms_filtered]
             pred_confs = pred_confs[nms_filtered]
 
             min_size_filter = torch.all((pred_bboxes[:, 3:6] - pred_bboxes[:,:3]) >= 5, 1)
-            
-            #if min_size_filter.sum() == 0:
-            #    min_size_filter[0] = True
 
             # Breaks at size predicted boxes
             pred_bboxes = pred_bboxes[min_size_filter]
@@ -124,7 +117,6 @@ class BSparseRPN_pure(nn.Module):
             if len(pred_bboxes) > max_proposals:
                 pred_bboxes = pred_bboxes[:max_proposals]
                 pred_confs = pred_confs[:max_proposals]
-
 
             bpred_bboxes.append(pred_bboxes)
 
@@ -159,17 +151,15 @@ class BSparseRPN_pure(nn.Module):
         
         bobjness_loss = []
         bbbox_loss = []
-        bfp_loss = []
         bweighted_loss = []
 
         # per batch
-        # check speed if better parallel
         pred_coords_l, pred_reg_values_l = bpred_reg_values.decomposed_coordinates_and_features # in sparse tensor format list N x 3, N x 8
         gt_coords_l, gt_reg_values_l = rpn_gt['breg_sparse'].decomposed_coordinates_and_features # gt occupancies N x 7
         for (pred_coords, pred_reg_values, gt_coords, gt_reg_values) in zip(pred_coords_l, pred_reg_values_l, gt_coords_l, gt_reg_values_l):
 
             pos_mask = gt_reg_values[:, 0] > 0 # occupancy mask -> 0 # bce loss # occupied
-            neg_mask = gt_reg_values[:, 0] == 0
+            #neg_mask = gt_reg_values[:, 0] == 0
 
             objness_loss = F.cross_entropy(pred_reg_values[:,:2], pos_mask.long()).unsqueeze(0)
 
@@ -178,7 +168,7 @@ class BSparseRPN_pure(nn.Module):
                 pdb.set_trace()
 
             # center coord, extent x,y,z similar to votenet
-            bbox_loss = F.smooth_l1_loss(pred_reg_values[pos_mask,2:]/10, gt_reg_values[pos_mask,1:]/10).unsqueeze(0) #
+            bbox_loss = F.smooth_l1_loss(pred_reg_values[pos_mask,2:]/10, gt_reg_values[pos_mask,1:]/10).unsqueeze(0)
 
             bobjness_loss.append(objness_loss)
 

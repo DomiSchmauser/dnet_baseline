@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 import MinkowskiEngine as ME
-from torch.nn import functional as F
 
 
 def chunk_sequence(seq, chunk_size=1, device=None):
@@ -50,7 +49,6 @@ def chunk_sequence(seq, chunk_size=1, device=None):
             obj_scan_mask = obj_scan_mask.numpy()
 
             # Fill in object features
-            #Todo add assert obj idx only once in dict
             obj_feats[str(obj_idx)] = {}
             obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()# counts True elements in scan
             obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
@@ -75,13 +73,12 @@ def chunk_sequence(seq, chunk_size=1, device=None):
             bboxes.append(np.expand_dims(box_3d, 0))
             obj_idxs.append(obj_idx)
 
-        if idx < 6:
-            sparse_reg_features.append(reg_values)
-            sparse_box_features.append(torch.from_numpy(np.concatenate(bboxes, axis=0)).to(device))
-            sparse_obj_features.append(obj_idxs)
-            bscan_inst_mask.append(torch.unsqueeze(scan_inst_mask, dim=0).to(device)) # Move to cuda
-            bscan_nocs_mask.append(nocs_mask.to(device)) # Move to cuda
-            bscan_obj.append(obj_feats)
+        sparse_reg_features.append(reg_values)
+        sparse_box_features.append(torch.from_numpy(np.concatenate(bboxes, axis=0)).to(device))
+        sparse_obj_features.append(obj_idxs)
+        bscan_inst_mask.append(torch.unsqueeze(scan_inst_mask, dim=0).to(device)) # Move to cuda
+        bscan_nocs_mask.append(nocs_mask.to(device)) # Move to cuda
+        bscan_obj.append(obj_feats)
 
         if (idx+1) % chunk_size == 0:
             bcoords = ME.utils.batched_coordinates(coords)
