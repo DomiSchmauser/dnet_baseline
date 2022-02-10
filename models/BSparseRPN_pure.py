@@ -131,10 +131,10 @@ class BSparseRPN_pure(nn.Module):
             brpn_conf.append(pred_conf)
 
             # find matching gt
-            if len(rpn_gt['bboxes']) > 0: # List with all bboxes in the scan
-                overlaps = bbox_overlaps(pred_bboxes.float(), rpn_gt['bboxes'].float())
+            if len(rpn_gt['bboxes'][B]) > 0: # List with all bboxes in the scan
+                overlaps = bbox_overlaps(pred_bboxes.float(), rpn_gt['bboxes'][B].float())
                 if len(overlaps) >0:
-                    gt_target = [rpn_gt['bobj_idxs'][i] for i in torch.argmax(overlaps, 1)]
+                    gt_target = [rpn_gt['bobj_idxs'][B][i] for i in torch.argmax(overlaps, 1)]
                 else:
                     gt_target = []
             else:

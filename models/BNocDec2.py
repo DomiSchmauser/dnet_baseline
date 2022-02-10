@@ -30,11 +30,15 @@ class BNocDec2(nn.Module):
             x_de2_crops = vg_crop(torch.cat([x_d2[B:B+1], x_e2[B:B+1]], 1), bbox_lvl2)
             x_e1_crops = vg_crop(x_e1[B:B+1], bbox_lvl2*2)
             # simple interpolate
-            x_de2_batch_crops = torch.cat([F.interpolate(x_de2_crop, size=self.bbox_shape.tolist(), mode='trilinear', align_corners=True) for x_de2_crop in x_de2_crops])
-            x_e1_batch_crops = torch.cat([F.interpolate(x_e1_crop, size=(self.bbox_shape*2).tolist(), mode='trilinear', align_corners=True) for x_e1_crop in x_e1_crops])
+            x_de2_batch_crops = torch.cat([F.interpolate(torch.unsqueeze(x_de2_crop, dim=0), size=self.bbox_shape.tolist(), mode='trilinear', align_corners=True) for x_de2_crop in x_de2_crops])
+            x_e1_batch_crops = torch.cat([F.interpolate(torch.unsqueeze(x_e1_crop, dim=0), size=(self.bbox_shape*2).tolist(), mode='trilinear', align_corners=True) for x_e1_crop in x_e1_crops])
 
             x_d0_batch_crops = self.net.forward(x_de2_batch_crops, x_e1_batch_crops)
-            x_d0_crops = [F.interpolate(x_d0_batch_crops[i:i + 1], size=tuple(bbox_lvl0[i, 3:6] - bbox_lvl0[i,:3]), mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
+
+            if len(bbox_lvl0.shape) == 1:
+                crop_size = tuple(bbox_lvl0[3:6].to(torch.int) - bbox_lvl0[:3].to(torch.int))
+
+            x_d0_crops = [F.interpolate(x_d0_batch_crops[i:i + 1], size=crop_size, mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
             
             bx_d0_crops.append(x_d0_crops)
         return bx_d0_crops
@@ -72,9 +76,9 @@ class BNocDec2(nn.Module):
 
     def training_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List, bscan_obj):
         if self.gt_augm:
-            bgt_bbox, bgt_obj_inds = rpn_gt['bboxes'], rpn_gt['bobj_idxs']
+            bgt_bbox, bgt_obj_inds = rpn_gt['bboxes'][0], rpn_gt['bobj_idxs']
             bbbox_lvl0 = [cats(bbox_lvl0, gt_bbox,0)  for bbox_lvl0, gt_bbox in zip(bbbox_lvl0, bgt_bbox)]
-            bgt_target = [gt_target + gt_obj_inds  for gt_target, gt_obj_inds in zip(bgt_target,bgt_obj_inds)]
+            bgt_target = [gt_target + gt_obj_inds for gt_target, gt_obj_inds in zip(bgt_target,bgt_obj_inds)]
         
         bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
 
@@ -82,15 +86,23 @@ class BNocDec2(nn.Module):
 
         bpred_aligned2scans = []
         for B in range(len(bx_d0_crops)):
+
+            scan_obj = bscan_obj[B]
+            gt_target = bgt_target[B]
+
             pred_aligned2scans = []
+            j = 0
             for pred_R, pred_t  in zip(analyses['pred_noc2scan_R'][B], analyses['pred_noc2scan_t'][B]):
+
                 pred_noc2scan = torch.eye(4)
                 pred_noc2scan[:3,:3] = pred_R
                 pred_noc2scan[:3, 3] = pred_t
 
-                pred_aligned2scan = pred_noc2scan @  get_aligned2noc()
-
+                aligned2noc = scan_obj[str(gt_target[j])]['aligned2noc']
+                pred_aligned2scan = pred_noc2scan @ aligned2noc
                 pred_aligned2scans.append(pred_aligned2scan)
+                j += 1
+
             bpred_aligned2scans.append(pred_aligned2scans)
 
         outputs = {'noc_values': bx_d0_crops, 'pred_aligned2scans': bpred_aligned2scans}
@@ -135,10 +147,13 @@ class BNocDec2(nn.Module):
             bbox_lvl0 = bbbox_lvl0[B]
             gt_target = bgt_target[B]
 
-            scan_noc_crops = vg_crop(rpn_gt['bscan_nocs'][B:B + 1], bbox_lvl0)
+            scan_noc_crops = vg_crop(torch.unsqueeze(rpn_gt['bscan_nocs_mask'][B], dim=0), bbox_lvl0) # Noc dim = 1 x 3 x X x Y x Z
             if binst_occ is None:
-                scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B:B+1], bbox_lvl0)
-                scan_noc_inst_crops = [((scan_inst_mask_crops[i][:,0] == int(gt_target[i])) & torch.all(scan_noc_crop >=0,1))[0] for i,scan_noc_crop in enumerate(scan_noc_crops)]
+                # Guess dim to check at nocs is 3 dim and shape scan noc crop 1 x 3 x X x Y x Z
+                scan_inst_mask_crops = vg_crop(torch.unsqueeze(rpn_gt['bscan_inst_mask'][B], dim=0), bbox_lvl0) # 1 x 1 x X x Y x Z
+                scan_noc_inst_crops = [((scan_inst_mask_crops[i] == int(gt_target[i])) & torch.all(torch.unsqueeze(scan_noc_crop, dim=0) >= 0, 1))[0] for i, scan_noc_crop in enumerate(scan_noc_crops)]
+                #print((scan_inst_mask_crops[0] == int(gt_target[0])).shape)
+                #print(torch.all(torch.unsqueeze(scan_noc_crops[0],dim=0) >= 0, 1).shape)
             else:
                 scan_noc_inst_crops = binst_occ[B]
 
@@ -155,9 +170,18 @@ class BNocDec2(nn.Module):
             rot_gt_compl_losses = []
             transl_gt_compl_losses = []
             best_rot_angles_y = []
-            for j in range(len(bbox_lvl0)):
-                bbox = bbox_lvl0[j]
-                dobject = bscan_obj[B][gt_target[j]]
+
+            if len(bbox_lvl0.shape) == 1:
+                loop_range = 1
+            else:
+                loop_range = len(bbox_lvl0)
+
+            for j in range(loop_range):
+                if len(bbox_lvl0.shape) == 1:
+                    bbox = bbox_lvl0
+                else:
+                    bbox = bbox_lvl0[j]
+                dobject = bscan_obj[B][str(gt_target[j])]
 
                 inst_occ = scan_noc_inst_crops[j]
                 if inst_occ.sum() < 5:
@@ -166,24 +190,23 @@ class BNocDec2(nn.Module):
 
                 scan_noc_inst_crops_grid_coords = torch.nonzero(inst_occ).float()
                 pred_noc_on_gt_inst = bx_d0_crops[B][j][0,:, inst_occ].T
-                gt_noc_on_gt_inst = scan_noc_crops[j][0,:, inst_occ].T
+                gt_noc_on_gt_inst = scan_noc_crops[j][:, inst_occ].T # REMOVED 0 HERE in slicing
                 # handle object rotational symmetry
                 noc_gt_compl_loss_j, best_rot_angle_y = self.rot_sym_loss(pred_noc_on_gt_inst,
                 gt_noc_on_gt_inst,
-                bscan_obj[B][gt_target[j]]['rot_sym'])
+                bscan_obj[B][str(gt_target[j])]['rot_sym'])
 
                 # compute rotations
-                noc2scan = bscan_obj[B][gt_target[j]]['noc2scan']
+                noc2scan = bscan_obj[B][str(gt_target[j])]['noc2scan']
                 # using GT scale
-                scaled_pred_nocs = pred_noc_on_gt_inst #* get_scale(noc2scan)[0] # scale always 1
+                scaled_pred_nocs = pred_noc_on_gt_inst * get_scale(noc2scan)[0]
 
                 pred_scaled_noc2scan_t, pred_scaled_noc2scan_R = self.nocs_to_tr(scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3])
-                s = torch.diag(get_scale(noc2scan)[:3]).cuda()
+                s = torch.diag(get_scale(noc2scan)[:3]).cuda().to(torch.float32)
                 pred_noc2scan_R = pred_scaled_noc2scan_R @ s
-                pred_noc2scan_t = pred_scaled_noc2scan_t 
+                pred_noc2scan_t = pred_scaled_noc2scan_t
 
-                #gt_scaled_noc2scan_R = (noc2scan[:3,:3] / get_scale(noc2scan[:3,:3])) @ angle_axis_to_rotation_matrix(torch.Tensor([[0, -best_rot_angle_y, 0]]))[0,:3,:3].cuda()
-                gt_scaled_noc2scan_R = (noc2scan[:3,:3] / 1) @ angle_axis_to_rotation_matrix(torch.Tensor([[0, -best_rot_angle_y, 0]]))[0,:3,:3].cuda()
+                gt_scaled_noc2scan_R = (noc2scan[:3,:3] / get_scale(noc2scan[:3,:3])).to(torch.float32) @ angle_axis_to_rotation_matrix(torch.Tensor([[0, -best_rot_angle_y, 0]]))[0,:3,:3].cuda()
 
                 # Rotational error
                 relative_compl_loss_R = pred_scaled_noc2scan_R @ torch.inverse(gt_scaled_noc2scan_R)
@@ -194,7 +217,7 @@ class BNocDec2(nn.Module):
                 delta_rot = rotation_matrix_to_angle_axis(relative_compl_loss_R.unsqueeze(0))[0]
                 analyses['rot_angle_diffs'] = analyses.get('rot_angle_diffs', []) + [torch.abs(delta_rot) * 180 / np.pi]
                 analyses['transl_diffs'] = analyses.get('transl_diffs', []) + [torch.abs(pred_noc2scan_t - noc2scan[:3,3])]
-                analyses['transl_diffs_center'] = analyses.get('transl_diffs_center', []) + [torch.abs( (bbox[:3] + bbox[3:6])/2 - dobject.aligned2scan[:3,3])]
+                analyses['transl_diffs_center'] = analyses.get('transl_diffs_center', []) + [torch.abs((bbox[:3] + bbox[3:6])/2 - dobject['aligned2scan'][:3,3])]
                 
                 analyses['pred_scaled_noc2scan_R'] = analyses.get('pred_scaled_noc2scan_R', []) + [pred_scaled_noc2scan_R]
                 analyses['pred_scaled_noc2scan_t'] = analyses.get('pred_scaled_noc2scan_t', []) + [pred_scaled_noc2scan_t]

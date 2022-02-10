@@ -7,6 +7,35 @@ import torch
 from sklearn.preprocessing import minmax_scale
 from dvis import dvis
 
+def get_noc2scan(rot_3d, loc_3d, scale, bin_vox):
+    '''
+    Calculates the noc2scan matrix
+    Not in the discretized space
+    '''
+
+    euler = mathutils.Euler(rot_3d)
+    rot = np.array(euler.to_matrix())
+
+    # Cad2Scan
+    cad2scan = np.identity(4)
+    cad2scan[:3, :3] = rot
+    cad2scan[:3, 3] = loc_3d
+
+    # Noc2Cad
+    noc2cad = np.identity(4)
+    noc2cad[:3, :3] = np.diag(scale) @ noc2cad[:3, :3]
+    cad2noc = np.linalg.inv(noc2cad)
+
+    # Y axis starts at 0 in cad space and is not centered
+    nonzero_inds = np.nonzero(bin_vox)[:-1]
+    points = nonzero_inds / 31
+    shift_y = points.numpy()[:, 1].min()
+    noc2cad[:3, 3] = np.array([-0.5, -shift_y, -0.5])
+
+    noc2scan = noc2cad @ cad2scan
+
+    return noc2scan, cad2noc
+
 def occ2noc(cropped_obj, box_3d, euler_rot):
     '''
     Get occ coords of a cropped object, transform to noc space

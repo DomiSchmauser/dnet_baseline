@@ -7,6 +7,7 @@ import torch
 import MinkowskiEngine as ME
 import open3d as o3d
 import matplotlib.pyplot as plt
+import mathutils
 
 from torch.utils.data import Dataset
 
@@ -14,7 +15,7 @@ sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
 from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel, boxpt2voxel
-from utils.pose_utils import backproject_rgb, cam2world, occ2world, occ2noc
+from utils.pose_utils import backproject_rgb, cam2world, occ2world, occ2noc, get_noc2scan
 from utils.net_utils import vg_crop
 from dvis import dvis
 
@@ -143,6 +144,10 @@ class Front_dataset(Dataset):
                     record['obj_scan_mask'][int(box_3d[0]):int(box_3d[3]), int(box_3d[1]):int(box_3d[4]),
                     int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
 
+                    # Noc2Scan
+                    noc2scan, cad2noc = get_noc2scan(rot_3d, loc_3d, scale, bin_vox)
+                    rot_3d = np.array(mathutils.Euler(rot_3d).to_matrix())
+
                     if self.debugging_mode:
                         dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
                         dvis(cropped_obj, c=1)
@@ -157,6 +162,8 @@ class Front_dataset(Dataset):
                         'scale': scale,
                         'rot': rot_3d,
                         'loc': loc_3d,
+                        'noc2scan': noc2scan,
+                        'cad2noc': cad2noc,
                         'rot_sym': rot_sym,
                         #'noc': noc,
                         'voxel': bin_vox,

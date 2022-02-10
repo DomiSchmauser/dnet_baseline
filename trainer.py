@@ -248,8 +248,6 @@ class Trainer:
         analyses = dict()
 
         assert len(inputs) == 1
-        ## Avoid memory breakdown
-        inputs = inputs[:5]
 
         for seq in inputs:
             dense_features, sparse_features, rpn_features = chunk_sequence(seq, chunk_size=1, device=self.device)
@@ -258,12 +256,13 @@ class Trainer:
         sparse_box_features = rpn_features[1]
         sparse_obj_features = rpn_features[2]
         bscan_inst_mask = rpn_features[3]
-        bscan_obj = rpn_features[4]
+        bscan_nocs_mask = rpn_features[4]
+        bscan_obj = rpn_features[5]
 
         #Todo: Adapt to loop per chunk
-        dense_features = dense_features[0]
+        dense_features = dense_features[0] #BS x 1 x X x Y x Z
         sparse_features = sparse_features[0]
-        sparse_reg_features = torch.from_numpy(sparse_reg_features[0]) # B x 7 x W x L x H
+        sparse_reg_features = torch.from_numpy(sparse_reg_features[0]) # BS x 7 x W x L x H
 
         s_coords, _ = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
 
@@ -278,10 +277,10 @@ class Trainer:
         rpn_gt = {}
         rpn_gt['breg_sparse'] = sparse_reg_tensor
         rpn_gt['scan_shape'] = dense_features.shape[2:]
-        rpn_gt['bboxes'] = torch.from_numpy(np.concatenate(sparse_box_features[0], axis=0)).to(self.device)
-        rpn_gt['bobj_idxs'] = sparse_obj_features[0]
-        rpn_gt['bscan_inst_mask'] = bscan_inst_mask
-        rpn_gt['bscan_nocs'] = None
+        rpn_gt['bboxes'] = sparse_box_features # list(N boxes x 6)
+        rpn_gt['bobj_idxs'] = sparse_obj_features #list(list ids)
+        rpn_gt['bscan_inst_mask'] = bscan_inst_mask # list( 1 x X x Y x Z)
+        rpn_gt['bscan_nocs_mask'] = bscan_nocs_mask # list( 3 x X x Y x Z)
 
 
         # Dense Pipeline ----------------------------------------------------------------------------------------------
@@ -298,7 +297,7 @@ class Trainer:
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
         btarget_noc = []
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
-            inst_crops = vg_crop(bscan_inst_mask[B], bbox_lvl0) # BSCAN INST MASK IN 3D? or just box and crop unoccupied
+            inst_crops = vg_crop(bscan_inst_mask[B], bbox_lvl0)
 
             target_num_occs = [(bscan_obj[B][str(obj_idx)]['num_occ'] != 0).sum() for obj_idx in gt_target] # number of occupancies per object
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
