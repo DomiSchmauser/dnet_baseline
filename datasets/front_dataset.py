@@ -122,7 +122,7 @@ class Front_dataset(Dataset):
 
                     # Binvox to world, then discretize and scale, finally place in the scene
                     bin_vox = get_voxel(voxel_path, scale)
-                    discrete_obj = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size)
+                    #discrete_obj = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size)
 
                     # Use box 3d and occupancy values to index object scan mask
                     cropped_obj = vg_crop(record['dense_grid'].numpy(), box_3d)
