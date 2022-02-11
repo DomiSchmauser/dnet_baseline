@@ -30,15 +30,13 @@ class BNocDec2(nn.Module):
             x_de2_crops = vg_crop(torch.cat([x_d2[B:B+1], x_e2[B:B+1]], 1), bbox_lvl2)
             x_e1_crops = vg_crop(x_e1[B:B+1], bbox_lvl2*2)
             # simple interpolate
-            x_de2_batch_crops = torch.cat([F.interpolate(torch.unsqueeze(x_de2_crop, dim=0), size=self.bbox_shape.tolist(), mode='trilinear', align_corners=True) for x_de2_crop in x_de2_crops])
-            x_e1_batch_crops = torch.cat([F.interpolate(torch.unsqueeze(x_e1_crop, dim=0), size=(self.bbox_shape*2).tolist(), mode='trilinear', align_corners=True) for x_e1_crop in x_e1_crops])
+            x_de2_batch_crops = torch.cat([F.interpolate(x_de2_crop, size=self.bbox_shape.tolist(), mode='trilinear', align_corners=True) for x_de2_crop in x_de2_crops])
+            x_e1_batch_crops = torch.cat([F.interpolate(x_e1_crop, size=(self.bbox_shape*2).tolist(), mode='trilinear', align_corners=True) for x_e1_crop in x_e1_crops])
 
             x_d0_batch_crops = self.net.forward(x_de2_batch_crops, x_e1_batch_crops)
 
-            if len(bbox_lvl0.shape) == 1:
-                crop_size = tuple(bbox_lvl0[3:6].to(torch.int) - bbox_lvl0[:3].to(torch.int))
-
-            x_d0_crops = [F.interpolate(x_d0_batch_crops[i:i + 1], size=crop_size, mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
+            x_d0_crops = [F.interpolate(x_d0_batch_crops[i:i + 1], size=tuple((bbox_lvl0[i, 3:6] - bbox_lvl0[i, :3]).detach().cpu().to(torch.int).tolist()),
+                                        mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
             
             bx_d0_crops.append(x_d0_crops)
         return bx_d0_crops
@@ -76,7 +74,7 @@ class BNocDec2(nn.Module):
 
     def training_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List, bscan_obj):
         if self.gt_augm:
-            bgt_bbox, bgt_obj_inds = rpn_gt['bboxes'][0], rpn_gt['bobj_idxs']
+            bgt_bbox, bgt_obj_inds = rpn_gt['bboxes'], rpn_gt['bobj_idxs']
             bbbox_lvl0 = [cats(bbox_lvl0, gt_bbox,0)  for bbox_lvl0, gt_bbox in zip(bbbox_lvl0, bgt_bbox)]
             bgt_target = [gt_target + gt_obj_inds for gt_target, gt_obj_inds in zip(bgt_target,bgt_obj_inds)]
         
@@ -150,12 +148,12 @@ class BNocDec2(nn.Module):
             scan_noc_crops = vg_crop(torch.unsqueeze(rpn_gt['bscan_nocs_mask'][B], dim=0), bbox_lvl0) # Noc dim = 1 x 3 x X x Y x Z
             if binst_occ is None:
                 # Guess dim to check at nocs is 3 dim and shape scan noc crop 1 x 3 x X x Y x Z
-                scan_inst_mask_crops = vg_crop(torch.unsqueeze(rpn_gt['bscan_inst_mask'][B], dim=0), bbox_lvl0) # 1 x 1 x X x Y x Z
-                scan_noc_inst_crops = [((scan_inst_mask_crops[i] == int(gt_target[i])) & torch.all(torch.unsqueeze(scan_noc_crop, dim=0) >= 0, 1))[0] for i, scan_noc_crop in enumerate(scan_noc_crops)]
+                scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbox_lvl0) # 1 x 1 x X x Y x Z
+                scan_noc_inst_crops = [((scan_inst_mask_crops[i] == int(gt_target[i])) & torch.all(scan_noc_crop >= 0, 1))[0] for i, scan_noc_crop in enumerate(scan_noc_crops)]
                 #print((scan_inst_mask_crops[0] == int(gt_target[0])).shape)
                 #print(torch.all(torch.unsqueeze(scan_noc_crops[0],dim=0) >= 0, 1).shape)
             else:
-                scan_noc_inst_crops = binst_occ[B]
+                scan_noc_inst_crops = binst_occ[B] # 1 x X x Y x Z
 
             analyses = dict()
 
@@ -190,7 +188,7 @@ class BNocDec2(nn.Module):
 
                 scan_noc_inst_crops_grid_coords = torch.nonzero(inst_occ).float()
                 pred_noc_on_gt_inst = bx_d0_crops[B][j][0,:, inst_occ].T
-                gt_noc_on_gt_inst = scan_noc_crops[j][:, inst_occ].T # REMOVED 0 HERE in slicing
+                gt_noc_on_gt_inst = scan_noc_crops[j][0,:, inst_occ].T
                 # handle object rotational symmetry
                 noc_gt_compl_loss_j, best_rot_angle_y = self.rot_sym_loss(pred_noc_on_gt_inst,
                 gt_noc_on_gt_inst,

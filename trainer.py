@@ -27,9 +27,9 @@ sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
 from model_cfg import init_cfg
-from utils.train_utils import sec_to_hm_str, _sparsify
+from utils.train_utils import sec_to_hm_str, _sparsify, loss_to_logging
 from utils.net_utils import vg_crop
-from datasets.sequence_chunking import chunk_sequence
+from datasets.sequence_chunking import chunk_sequence, batch_collate
 
 # Model import
 from models.BCompletionDec2 import BCompletionDec2
@@ -108,8 +108,8 @@ class Trainer:
             self.opt.batch_size,
             shuffle=True,
             num_workers=self.opt.num_workers,
-            collate_fn=lambda x:x,
-            pin_memory=True,
+            collate_fn=batch_collate,
+            pin_memory=False,
             drop_last=True)
 
         val_dataset = self.dataset(
@@ -121,8 +121,8 @@ class Trainer:
             batch_size=self.opt.batch_size,
             shuffle=False,
             num_workers=self.opt.num_workers,
-            collate_fn=lambda x:x,
-            pin_memory=True,
+            collate_fn=batch_collate,
+            pin_memory=False,
             drop_last=False)
 
         if not os.path.exists(self.opt.log_dir):
@@ -135,7 +135,7 @@ class Trainer:
 
         num_train_samples = len(train_dataset)
         num_eval_samples = len(val_dataset)
-        print("There are {} training sequences and {} validation sequences in total...".format(num_train_samples,
+        print("There are {} training images and {} validation images in total...".format(num_train_samples,
                                                                                        num_eval_samples))
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
@@ -236,13 +236,7 @@ class Trainer:
             if int(batch_idx + 1) % self.opt.log_frequency == 0:
                 self.log_time(batch_idx, duration, losses['total_loss'])
 
-                log_losses = dict()
-                for k,v in losses.items():
-                    if k != 'total_loss':
-                        log_losses[k] = v['bweighted_loss'][0].detach().cpu().item()
-                    else:
-                        log_losses[k] = v
-
+                log_losses = loss_to_logging(losses)
                 self.log("train", log_losses)
 
             self.step += 1
@@ -259,39 +253,17 @@ class Trainer:
         losses = dict()
         analyses = dict()
 
-        # Data preparation --------------------------------------------------------------------------------------------
-        for seq in inputs:
-            dense_features, sparse_features, rpn_features = chunk_sequence(seq, chunk_size=1, device=self.device)
-
-        sparse_reg_features = rpn_features[0]
-        sparse_box_features = rpn_features[1]
-        sparse_obj_features = rpn_features[2]
-        bscan_inst_mask = rpn_features[3]
-        bscan_nocs_mask = rpn_features[4]
-        bscan_obj = rpn_features[5]
-
-        #Todo: Adapt to loop per chunk
-        dense_features = dense_features[0] #BS x 1 x X x Y x Z
-        sparse_features = sparse_features[0]
-        sparse_reg_features = torch.from_numpy(sparse_reg_features[0]) # BS x 7 x W x L x H
-
-        s_coords, _ = sparse_features.decomposed_coordinates_and_features # for decomposition of batched data
-
-        # Sparsify reg values and to ME sparse tensor
-        s_coords = s_coords[0]
-        s_reg_feats = sparse_reg_features[0, :, s_coords[:,0].long(), s_coords[:,1].long(), s_coords[:,2].long()]
-        bs_reg_feats = torch.transpose(s_reg_feats, 0, 1)
-        bs_reg_coords = ME.utils.batched_coordinates([s_coords.detach().cpu()])
-        sparse_reg_tensor = ME.SparseTensor(bs_reg_feats.to(self.device),
-                                       bs_reg_coords.to(self.device))
+        # Unpack data
+        dense_features, sparse_features, rpn_features = inputs
 
         rpn_gt = {}
-        rpn_gt['breg_sparse'] = sparse_reg_tensor
+        rpn_gt['breg_sparse'] = rpn_features[0]
         rpn_gt['scan_shape'] = dense_features.shape[2:]
-        rpn_gt['bboxes'] = sparse_box_features # list(N boxes x 6)
-        rpn_gt['bobj_idxs'] = sparse_obj_features #list(list ids)
-        rpn_gt['bscan_inst_mask'] = bscan_inst_mask # list( 1 x X x Y x Z)
-        rpn_gt['bscan_nocs_mask'] = bscan_nocs_mask # list( 3 x X x Y x Z)
+        rpn_gt['bboxes'] = rpn_features[1]  # list(N boxes x 6)
+        rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
+        rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
+        rpn_gt['bscan_nocs_mask'] = rpn_features[4] # list( 3 x X x Y x Z)
+        bscan_obj = rpn_features[5]
 
 
         # Dense Pipeline ----------------------------------------------------------------------------------------------
@@ -307,7 +279,7 @@ class Trainer:
         # Targets
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
-            inst_crops = vg_crop(bscan_inst_mask[B], bbox_lvl0)
+            inst_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbox_lvl0)
 
             target_num_occs = [(bscan_obj[B][str(obj_idx)]['num_occ'] != 0).sum() for obj_idx in gt_target] # number of occupancies per object
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
@@ -357,38 +329,16 @@ class Trainer:
         analyses = dict()
         outputs = dict()
 
-        # Data preparation --------------------------------------------------------------------------------------------
-        for seq in inputs:
-            dense_features, sparse_features, rpn_features = chunk_sequence(seq, chunk_size=1, device=self.device)
-
-        sparse_reg_features = rpn_features[0]
-        sparse_box_features = rpn_features[1]
-        sparse_obj_features = rpn_features[2]
-        bscan_inst_mask = rpn_features[3]
-        bscan_nocs_mask = rpn_features[4]
-
-        # Todo: Adapt to loop per chunk
-        dense_features = dense_features[0]  # BS x 1 x X x Y x Z
-        sparse_features = sparse_features[0]
-        sparse_reg_features = torch.from_numpy(sparse_reg_features[0])  # BS x 7 x W x L x H
-
-        s_coords, _ = sparse_features.decomposed_coordinates_and_features  # for decomposition of batched data
-
-        # Sparsify reg values and to ME sparse tensor
-        s_coords = s_coords[0]
-        s_reg_feats = sparse_reg_features[0, :, s_coords[:, 0].long(), s_coords[:, 1].long(), s_coords[:, 2].long()]
-        bs_reg_feats = torch.transpose(s_reg_feats, 0, 1)
-        bs_reg_coords = ME.utils.batched_coordinates([s_coords.detach().cpu()])
-        sparse_reg_tensor = ME.SparseTensor(bs_reg_feats.to(self.device),
-                                            bs_reg_coords.to(self.device))
+        # Unpack data
+        dense_features, sparse_features, rpn_features = inputs
 
         rpn_gt = {}
-        rpn_gt['breg_sparse'] = sparse_reg_tensor
+        rpn_gt['breg_sparse'] = rpn_features[0]
         rpn_gt['scan_shape'] = dense_features.shape[2:]
-        rpn_gt['bboxes'] = sparse_box_features  # list(N boxes x 6)
-        rpn_gt['bobj_idxs'] = sparse_obj_features  # list(list ids)
-        rpn_gt['bscan_inst_mask'] = bscan_inst_mask  # list( 1 x X x Y x Z)
-        rpn_gt['bscan_nocs_mask'] = bscan_nocs_mask  # list( 3 x X x Y x Z)
+        rpn_gt['bboxes'] = rpn_features[1]  # list(N boxes x 6)
+        rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
+        rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
+        rpn_gt['bscan_nocs_mask'] = rpn_features[4]  # list( 3 x X x Y x Z)
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.validation_step(sparse_features)
@@ -403,7 +353,7 @@ class Trainer:
         # Targets
         btarget_occ, bgt_target_compl = [], []
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
-            inst_crops = vg_crop(bscan_inst_mask[B], bbox_lvl0)
+            inst_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbox_lvl0)
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
                                 zip(gt_target, inst_crops)]
             btarget_occ.append(inst_occ_targets)
@@ -438,38 +388,16 @@ class Trainer:
         '''
         outputs = dict()
 
-        # Data preparation --------------------------------------------------------------------------------------------
-        for seq in inputs:
-            dense_features, sparse_features, rpn_features = chunk_sequence(seq, chunk_size=1, device=self.device)
-
-        sparse_reg_features = rpn_features[0]
-        sparse_box_features = rpn_features[1]
-        sparse_obj_features = rpn_features[2]
-        bscan_inst_mask = rpn_features[3]
-        bscan_nocs_mask = rpn_features[4]
-
-        # Todo: Adapt to loop per chunk
-        dense_features = dense_features[0]  # BS x 1 x X x Y x Z
-        sparse_features = sparse_features[0]
-        sparse_reg_features = torch.from_numpy(sparse_reg_features[0])  # BS x 7 x W x L x H
-
-        s_coords, _ = sparse_features.decomposed_coordinates_and_features  # for decomposition of batched data
-
-        # Sparsify reg values and to ME sparse tensor
-        s_coords = s_coords[0]
-        s_reg_feats = sparse_reg_features[0, :, s_coords[:, 0].long(), s_coords[:, 1].long(), s_coords[:, 2].long()]
-        bs_reg_feats = torch.transpose(s_reg_feats, 0, 1)
-        bs_reg_coords = ME.utils.batched_coordinates([s_coords.detach().cpu()])
-        sparse_reg_tensor = ME.SparseTensor(bs_reg_feats.to(self.device),
-                                            bs_reg_coords.to(self.device))
+        # Unpack data
+        dense_features, sparse_features, rpn_features = inputs
 
         rpn_gt = {}
-        rpn_gt['breg_sparse'] = sparse_reg_tensor
+        rpn_gt['breg_sparse'] = rpn_features[0]
         rpn_gt['scan_shape'] = dense_features.shape[2:]
-        rpn_gt['bboxes'] = sparse_box_features  # list(N boxes x 6)
-        rpn_gt['bobj_idxs'] = sparse_obj_features  # list(list ids)
-        rpn_gt['bscan_inst_mask'] = bscan_inst_mask  # list( 1 x X x Y x Z)
-        rpn_gt['bscan_nocs_mask'] = bscan_nocs_mask  # list( 3 x X x Y x Z)
+        rpn_gt['bboxes'] = rpn_features[1]  # list(N boxes x 6)
+        rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
+        rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
+        rpn_gt['bscan_nocs_mask'] = rpn_features[4]  # list( 3 x X x Y x Z)
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.infer_step(sparse_features)

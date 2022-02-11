@@ -7,6 +7,25 @@ from torch.nn import init
 
 import sys
 
+def loss_to_logging(losses):
+
+    log_losses = dict()
+    for k, v in losses.items():
+        if k == 'rpn':
+            log_losses[k] = 0
+            for m in range(len(losses[k]['bweighted_loss'])):
+                log_losses[k] += v['bweighted_loss'][m].detach().cpu().item()
+            log_losses[k] /= len(losses[k]['bweighted_loss'])
+        elif k == 'completion' or k == 'noc':
+            log_losses[k] = 0
+            for m in range(len(losses[k]['bweighted_loss'])):
+                log_losses[k] += torch.mean(v['bweighted_loss'][m]).detach().cpu().item()
+            log_losses[k] /= len(losses[k]['bweighted_loss'])
+        else:
+            log_losses[k] = v
+
+    return log_losses
+
 def init_weights(net, init_type='normal', init_gain=0.02):
     """Initialize network weights.
     Parameters:
