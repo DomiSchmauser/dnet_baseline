@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import torch
 from torch import nn
@@ -42,12 +44,12 @@ class BNocDec2(nn.Module):
         return bx_d0_crops
 
 
-    def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List, binst_occ=None):
+    def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List, bscan_obj, binst_occ=None):
         if not all([len(bbox_lvl0)>0 for bbox_lvl0 in bbbox_lvl0]):
             return [[]], {'bweighted_loss': [torch.Tensor([0.0]).cuda()], 'bnoc_gt_inst_loss': [torch.Tensor([0.0]).cuda()], 'brot_gt_inst_loss': [torch.Tensor([0.0]).cuda()]}, {}, {}
 
         bnocs = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
-        losses, analyses, bbest_rot_angles_y = self.loss(bnocs, bbbox_lvl0, bgt_target, rpn_gt, binst_occ)
+        losses, analyses, bbest_rot_angles_y = self.loss(bnocs, bbbox_lvl0, bgt_target, rpn_gt, bscan_obj, binst_occ=binst_occ)
 
         #
         bbest_rots = [[angle_axis_to_rotation_matrix(torch.Tensor([[0, - best_rot_angle_y , 0]]))[0,:3,:3].cuda() for best_rot_angle_y in best_rot_angles_y] for best_rot_angles_y in  bbest_rot_angles_y]
@@ -179,7 +181,12 @@ class BNocDec2(nn.Module):
                     bbox = bbox_lvl0
                 else:
                     bbox = bbox_lvl0[j]
-                dobject = bscan_obj[B][str(gt_target[j])]
+                try:
+                    dobject = bscan_obj[B][str(gt_target[j])]
+                except:
+                    print(bscan_obj[B])
+                    print(str(gt_target[j]))
+                    sys.exit()
 
                 inst_occ = scan_noc_inst_crops[j]
                 if inst_occ.sum() < 5:
@@ -214,7 +221,7 @@ class BNocDec2(nn.Module):
 
                 delta_rot = rotation_matrix_to_angle_axis(relative_compl_loss_R.unsqueeze(0))[0]
                 analyses['rot_angle_diffs'] = analyses.get('rot_angle_diffs', []) + [torch.abs(delta_rot) * 180 / np.pi]
-                analyses['transl_diffs'] = analyses.get('transl_diffs', []) + [torch.abs(pred_noc2scan_t - noc2scan[:3,3])]
+                analyses['transl_diffs'] = analyses.get('transl_diffs', []) + [torch.abs(pred_noc2scan_t - noc2scan[:3,3])] # noc2 scan pred is in discrete space noc2scan gt in coord space
                 analyses['transl_diffs_center'] = analyses.get('transl_diffs_center', []) + [torch.abs((bbox[:3] + bbox[3:6])/2 - dobject['aligned2scan'][:3,3])]
                 
                 analyses['pred_scaled_noc2scan_R'] = analyses.get('pred_scaled_noc2scan_R', []) + [pred_scaled_noc2scan_R]

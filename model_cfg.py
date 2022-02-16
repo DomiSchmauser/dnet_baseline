@@ -5,6 +5,9 @@ def init_cfg():
     Dnet baseline setup
     '''
     model_cfg = {
+        'general': {
+            'sparse_pretrain_epochs': 3,
+        },
         'sparse_backbone': {
             'num_features': 30,
         },

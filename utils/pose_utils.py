@@ -4,10 +4,11 @@ import mathutils
 import MinkowskiEngine as ME
 import torch
 
+from torch.nn import functional as F
 from sklearn.preprocessing import minmax_scale
 from dvis import dvis
 
-def get_noc2scan(rot_3d, loc_3d, scale, bin_vox):
+def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.03):
     '''
     Calculates the noc2scan matrix
     Not in the discretized space
@@ -17,20 +18,22 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox):
     rot = np.array(euler.to_matrix())
 
     # Cad2Scan
+    scale_quant = 1/quantization_size
     cad2scan = np.identity(4)
     cad2scan[:3, :3] = rot
-    cad2scan[:3, 3] = loc_3d
+    cad2scan[:3, 3] = loc_3d * scale_quant
 
     # Noc2Cad
     noc2cad = np.identity(4)
     noc2cad[:3, :3] = np.diag(scale) @ noc2cad[:3, :3]
-    cad2noc = np.linalg.inv(noc2cad)
 
     # Y axis starts at 0 in cad space and is not centered
     nonzero_inds = np.nonzero(bin_vox)[:-1]
     points = nonzero_inds / 31
     shift_y = points.numpy()[:, 1].min()
     noc2cad[:3, 3] = np.array([-0.5, -shift_y, -0.5])
+
+    cad2noc = np.linalg.inv(noc2cad)
 
     noc2scan = noc2cad @ cad2scan
 
@@ -69,58 +72,55 @@ def occ2noc(cropped_obj, box_3d, euler_rot):
 
 def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03):
     '''
-    Calculate nocs map from occupancy grid and 3D rot
     euler rotation: CAD2World space in Blender coord space
-
-    def center(points):
-        x_range = points[:,0].max() - points[:,0].min()
-        y_range = points[:,1].max() - points[:,1].min()
-        z_range = points[:,2].max() - points[:,2].min()
-        ranges = np.array([x_range, y_range, z_range])
-        return points - ranges/2
     '''
 
     euler = mathutils.Euler(euler_rot)
     rot = np.array(euler.to_matrix())
 
+    # Voxel space to CAD space
     nonzero_inds = np.nonzero(voxel_grid)[:-1]
-
-    max_idx = torch.max(nonzero_inds)
-
     points = nonzero_inds / 31 - 0.5
     points = points.numpy()
     points[:, 1] -= points[:, 1].min() # CAD space y is shifted up to start at 0
 
-    '''
-    nocs_pcd = o3d.geometry.PointCloud()
-    nocs_pcd.points = o3d.utility.Vector3dVector(points)
-    nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
-    o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
-    '''
-
     # CAD to world
     world_pc = rot @ points.transpose() + np.expand_dims(translation, axis=-1)
-    world_pc = world_pc.transpose() # world space
+    world_pc = world_pc.transpose() # World space
 
     # Discretize
-    coords = ME.utils.sparse_quantize(torch.from_numpy(world_pc).contiguous(memory_format=torch.contiguous_format) , features=None,
-                             quantization_size=quantization_size)
+    coords = ME.utils.sparse_quantize(torch.from_numpy(world_pc).contiguous(memory_format=torch.contiguous_format),
+                                      features=None,
+                                      quantization_size=quantization_size)
+
+    grid = np.zeros((192, 192, 96))
+
+
+    x = coords[:, 0]
+    y = coords[:, 1]
+    z = coords[:, 2]
 
     x_min, x_max = bbox[0], bbox[3]
     y_min, y_max = bbox[1], bbox[4]
     z_min, z_max = bbox[2], bbox[5]
 
-    x_scaled = minmax_scale(coords[:, 0], feature_range=(x_min, x_max))
-    y_scaled = minmax_scale(coords[:, 1], feature_range=(y_min, y_max))
-    z_scaled = minmax_scale(coords[:, 2], feature_range=(z_min, z_max))
+    x_scaled = np.rint(minmax_scale(coords[:, 0], feature_range=(x_min, x_max))).astype(np.int)
+    y_scaled = np.rint(minmax_scale(coords[:, 1], feature_range=(y_min, y_max))).astype(np.int)
+    z_scaled = np.rint(minmax_scale(coords[:, 2], feature_range=(z_min, z_max))).astype(np.int)
 
-    noc_discretized = np.rint(np.array([x_scaled, y_scaled, z_scaled]).T)
+    grid[x_scaled,y_scaled,z_scaled] = 1
 
+
+    #out_size = tuple(bbox[3:].astype(np.int))
+
+    # Interpolate
+    #scaled_grid = F.interpolate(torch.from_numpy(np.expand_dims(grid, axis=(0,1))), size=out_size, mode='trilinear', align_corners=True)
 
     #dvis(np.expand_dims(bbox, axis=0), fmt='box', c=1)
-    #dvis(noc_discretized)
+    #dvis(grid, fmt='voxels')
 
-    return world_pc
+
+    return (x_scaled, y_scaled, z_scaled)
 
 
 def backproject_rgb(rgb, depth, intrinsics, debug_mode=False):
@@ -154,8 +154,9 @@ def backproject_rgb(rgb, depth, intrinsics, debug_mode=False):
 
     if debug_mode:
         depth_pc_obj = o3d.geometry.PointCloud()
+        nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
         depth_pc_obj.points = o3d.utility.Vector3dVector(pts)
-        o3d.visualization.draw_geometries([depth_pc_obj])
+        o3d.visualization.draw_geometries([depth_pc_obj, nocs_origin])
 
 
     return rgb_pts
@@ -175,4 +176,67 @@ def cam2world(rgb_pts, campose):
 
     return rgb_world
 
+'''
+def center(points):
+    x_range = points[:,0].max() - points[:,0].min()
+    y_range = points[:,1].max() - points[:,1].min()
+    z_range = points[:,2].max() - points[:,2].min()
+    ranges = np.array([x_range, y_range, z_range])
+    return points - ranges/2
+'''
 
+'''
+    nocs_pcd = o3d.geometry.PointCloud()
+    nocs_pcd.points = o3d.utility.Vector3dVector(points)
+    nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+    o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
+    '''
+
+'''
+ pc = o3d.geometry.PointCloud()
+    pc.points = o3d.utility.Vector3dVector(world_pc)
+
+    vg = o3d.geometry.VoxelGrid.create_from_point_cloud(pc, 0.03)
+    occ_list = vg.get_voxels()
+    c = []
+    for vx in occ_list:
+        coordinates = vx.grid_index
+        c.append(np.expand_dims(coordinates, axis=0))
+
+    vg_idxs = np.concatenate(c, axis=0)
+    x_m, y_m, z_m = vg_idxs[:,0].max(), vg_idxs[:,1].max(), vg_idxs[:,2].max()
+    grid = torch.zeros((x_m+1, y_m+1, z_m+1))
+
+    grid[vg_idxs[:,0], vg_idxs[:,1], vg_idxs[:,2]] = 1
+    dvis(grid, fmt='voxels')
+'''
+
+'''
+
+ # Shift to zero
+ box_min = bbox[:3].copy()
+ bbox[:3] -= box_min
+ bbox[3:] -= box_min
+ bbox = bbox.astype(np.int)
+
+ grid = np.zeros((bbox[3], bbox[4], bbox[5]))
+
+
+ x_scaled = np.rint(minmax_scale(coords[:, 0], feature_range=(0, bbox[3]-1))).astype(np.int)
+ y_scaled = np.rint(minmax_scale(coords[:, 1], feature_range=(0, bbox[4]-1))).astype(np.int)
+ z_scaled = np.rint(minmax_scale(coords[:, 2], feature_range=(0, bbox[5]-1))).astype(np.int)
+ grid[x_scaled, y_scaled, z_scaled] = 1
+
+ '''
+'''
+# Shift to 0
+x -= x.min()
+y -= y.min()
+z -= z.min()
+
+x_min, x_max = x.min(), x.max()
+y_min, y_max = y.min(), y.max()
+z_min, z_max = z.min(), z.max()
+
+grid = np.zeros((x_max+1, y_max+1, z_max+1))
+'''

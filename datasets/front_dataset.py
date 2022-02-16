@@ -100,7 +100,7 @@ class Front_dataset(Dataset):
                 record['noc_scan_mask'] = torch.zeros(noc_shape)
 
                 if self.debugging_mode:
-                    dvis(record['dense_grid'], c=0)
+                    dvis(record['dense_grid'], fmt='voxels')
 
                 # Object level annotations
                 for anno in imgs_anns['annotations']:
@@ -116,7 +116,8 @@ class Front_dataset(Dataset):
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
                         voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
-                        # Pose
+
+                        # Cad2World transformation in Blender Space
                         scale = np.array(anno['3Dscale'])
                         rot_3d = anno['3Drot']
                         box_3d = anno['3Dbbox']
@@ -129,14 +130,20 @@ class Front_dataset(Dataset):
                             loc_3d -= record['pc_offset']
 
                         box_3d = boxpt2voxel(box_3d, self.quantization_size)
-                        loc_3d *= (1/self.quantization_size) #absolute to discrete space
+                        if self.debugging_mode:
+                            dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
 
                         # Binvox to world, then discretize and scale, finally place in the scene
                         bin_vox = get_voxel(voxel_path, scale)
-                        #discrete_obj = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size)
+                        completed_obj_coords = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size)
+                        record['obj_scan_mask'][completed_obj_coords[0], completed_obj_coords[1],
+                        completed_obj_coords[2]] = 1
+
+                        #dvis(record['obj_scan_mask'], fmt='voxels')
+                        #dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
 
                         # Use box 3d and occupancy values to index object scan mask
-                        cropped_obj = vg_crop(record['dense_grid'].numpy(), box_3d)
+                        cropped_obj = vg_crop(record['obj_scan_mask'].numpy(), box_3d)
 
                         # Nocs coords mask
                         noc_obj = occ2noc(cropped_obj, box_3d, rot_3d)

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import MinkowskiEngine as ME
+import open3d as o3d
 
 def batch_collate(batch):
     '''
@@ -43,19 +44,9 @@ def batch_collate(batch):
             box_3d = obj['box_3d']
             obj_idx = obj['instance_id']
 
+            # Dense reg values
             obj_scan_mask = scan_inst_mask == int(obj_idx)
             obj_scan_mask = obj_scan_mask.numpy()
-
-            # Fill in object features
-            obj_feats[str(obj_idx)] = {}
-            obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()# counts True elements in scan
-            obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
-            obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
-            obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4).to(device)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3,3] = torch.from_numpy(obj['loc'])
-            obj_feats[str(obj_idx)]['aligned2scan'][:3,:3] = torch.from_numpy(obj['rot'])
-            obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
-
 
             obj_scan_coords = np.argwhere(obj_scan_mask)
 
@@ -64,9 +55,19 @@ def batch_collate(batch):
 
             delta_t = obj_center - obj_scan_coords
             delta_s = np.ones_like(delta_t) * obj_size
-            w = 1 - (np.linalg.norm(delta_t / delta_s, axis=1, ord=2) / np.sqrt(3))
+            w = 1 - (np.linalg.norm(delta_t / delta_s, axis=1, ord=2) / np.sqrt(3)) # W represents distance to center for objectness supervision
 
             reg_values[0, :, obj_scan_mask] = np.concatenate([np.expand_dims(w, 1), delta_t, delta_s], 1)
+
+            # Fill in object features
+            obj_feats[str(obj_idx)] = {}
+            obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()  # counts True elements in scan
+            obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
+            obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
+            obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4).to(device)
+            obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.03)
+            obj_feats[str(obj_idx)]['aligned2scan'][:3, :3] = torch.from_numpy(obj['rot'])
+            obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
 
             bboxes.append(np.expand_dims(box_3d, 0))
             obj_idxs.append(obj_idx)
@@ -83,7 +84,7 @@ def batch_collate(batch):
     bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
     sparse_features = ME.SparseTensor(bfeats.to(device),
                                       bcoords.to(device))  # Sparse tensor expects batched data
-    dense_features = torch.unsqueeze(torch.cat(occ, dim=0), dim=1).to(device)
+    dense_features = torch.unsqueeze(torch.cat(occ, dim=0), dim=1).to(device).to(torch.float)
 
     # Batch sparse regression features
     sparse_reg_features = torch.from_numpy(np.concatenate(sparse_reg_features, axis=0))

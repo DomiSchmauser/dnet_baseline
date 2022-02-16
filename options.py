@@ -32,7 +32,7 @@ class Options:
         self.parser.add_argument("--weight_decay", # L2 Regularization
                                  type=float,
                                  help="weight decay",
-                                 default=1e-4) # 1e-4
+                                 default=0) # 1e-4
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",

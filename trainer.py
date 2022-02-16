@@ -53,8 +53,7 @@ class Trainer:
 
         # Model setup --------------------------------------------------------------------------------------------------
         cfg = init_cfg()
-        self.min_coords = torch.IntTensor([0, 0, 0])
-        self.max_coords = torch.IntTensor([191, 95, 191])
+        self.sparse_pretrain_ep = cfg['general']['sparse_pretrain_epochs']
 
         # Sparse Backbone & RPN
         self.models["sparse_backbone"] = networks.PureSparseBackboneCol_Res1(conf=cfg['sparse_backbone'])
@@ -165,32 +164,48 @@ class Trainer:
 
         for self.epoch in range(self.opt.num_epochs):
             print('Start training ...')
-            self.run_epoch()
+            if self.epoch < self.sparse_pretrain_ep:
+                sparse_pretrain = True
+                print('Sparse network pretraining ...')
+            else:
+                sparse_pretrain = False
+                print('Full pipeline training ...')
+
+            self.run_epoch(sparse_pretrain=sparse_pretrain)
             if (self.epoch+1) % self.opt.save_frequency == 0 \
                     and self.opt.save_model and (self.epoch+1) >= self.opt.start_saving:
                 self.save_model(is_val=False)
 
-    def val(self):
+    def val(self, sparse_pretrain=False):
         self.set_eval()
 
         print("Starting evaluation ...")
-
+        overall_losses = []
         for batch_idx, inputs in enumerate(self.val_loader):
 
             with torch.no_grad():
-                outputs, losses, analyses, _ = self.validation_step(inputs)
+                outputs, losses, analyses, _ = self.validation_step(inputs, sparse_pretrain=sparse_pretrain)
+                overall_losses.append(losses)
 
-                '''
+                if sparse_pretrain:
+                    rpn_loss = losses['rpn']['total_loss']
+                    losses['total_loss'] = rpn_loss.item()
+                else:
+                    rpn_loss = losses['rpn']['total_loss']
+                    loss = losses['total_loss']
+                    losses['total_loss'] = loss.item() + rpn_loss.item()
+            '''
                 eval_df, gt_eval_df = evaluate(outputs, inputs, losses, analyses)
                 collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
                 collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
                                                                 ignore_index=True)
                 '''
 
-        #self.log("val", val_loss_mean)
+        log_losses = loss_to_logging(overall_losses)
+        self.log("val", log_losses)
 
-        #self._save_valmodel(val_loss_mean)
-        del inputs, outputs, losses
+        self._save_valmodel(log_losses['total_loss'])
+        del inputs, outputs, losses, overall_losses
 
         self.set_train()
 
@@ -207,25 +222,33 @@ class Trainer:
             with torch.no_grad():
                 outputs = self.infer_step(inputs)
 
-    def run_epoch(self):
+    def run_epoch(self, sparse_pretrain=False):
         self.set_train()
 
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
-            _, losses, analyses, _ = self.training_step(inputs)
-            rpn_loss = losses['rpn']['total_loss']
-            loss = losses['total_loss']
+            _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain)
 
-            self.rpn_optimizer.zero_grad()
-            self.general_optimizer.zero_grad()
+            if sparse_pretrain:
+                rpn_loss = losses['rpn']['total_loss']
+                self.rpn_optimizer.zero_grad()
+                rpn_loss.backward()
+                losses['total_loss'] = rpn_loss.item()  # release graph after backprop
+                self.rpn_optimizer.step()
+            else:
+                rpn_loss = losses['rpn']['total_loss']
+                loss = losses['total_loss']
 
-            rpn_loss.backward()
-            loss.backward()
+                self.rpn_optimizer.zero_grad()
+                self.general_optimizer.zero_grad()
 
-            losses['total_loss'] = loss.item() + rpn_loss.item()  # release graph after backprop
+                rpn_loss.backward()
+                loss.backward()
 
-            self.rpn_optimizer.step()
-            self.general_optimizer.step()
+                losses['total_loss'] = loss.item() + rpn_loss.item()  # release graph after backprop
+
+                self.rpn_optimizer.step()
+                self.general_optimizer.step()
 
             torch.cuda.empty_cache()
 
@@ -236,14 +259,14 @@ class Trainer:
             if int(batch_idx + 1) % self.opt.log_frequency == 0:
                 self.log_time(batch_idx, duration, losses['total_loss'])
 
-                log_losses = loss_to_logging(losses)
+                log_losses = loss_to_logging([losses])
                 self.log("train", log_losses)
 
             self.step += 1
         #self.model_lr_scheduler.step()
-        self.val()
+        self.val(sparse_pretrain=sparse_pretrain)
 
-    def training_step(self, inputs):
+    def training_step(self, inputs, sparse_pretrain=False):
         '''
         One general training step of the whole network pipeline
         Inputs: Batch of num sequences
@@ -265,16 +288,19 @@ class Trainer:
         rpn_gt['bscan_nocs_mask'] = rpn_features[4] # list( 3 x X x Y x Z)
         bscan_obj = rpn_features[5]
 
-
-        # Dense Pipeline ----------------------------------------------------------------------------------------------
-        x_e1, x_e2, x_d2 = self.backbone.training_step(dense_features)  # enc_layer_1, enc_layer_2, dec_layer_2
-
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.training_step(sparse_features)
         rpn_output, rpn_losses, rpn_analyses, rpn_timings = self.rpn.training_step(s_e2, rpn_gt)
         losses["rpn"] = rpn_losses
         losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
         bbbox_lvl0, bgt_target, brpn_conf = rpn_output
+
+        # Only train sparse pipeline
+        if sparse_pretrain:
+            return None, losses, rpn_analyses, {}
+
+        # Dense Pipeline ----------------------------------------------------------------------------------------------
+        x_e1, x_e2, x_d2 = self.backbone.training_step(dense_features)  # enc_layer_1, enc_layer_2, dec_layer_2
 
         # Targets
         btarget_occ, bbbox_lvl0_compl, bgt_target_compl = [], [], []
@@ -320,7 +346,7 @@ class Trainer:
 
         return None, losses, analyses, {}
 
-    def validation_step(self, inputs):
+    def validation_step(self, inputs, sparse_pretrain=False):
         '''
         One general validation step of the whole network pipeline
         '''
@@ -339,6 +365,7 @@ class Trainer:
         rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
         rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
         rpn_gt['bscan_nocs_mask'] = rpn_features[4]  # list( 3 x X x Y x Z)
+        bscan_obj = rpn_features[5]
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.validation_step(sparse_features)
@@ -346,6 +373,9 @@ class Trainer:
         losses["rpn"] = rpn_losses
         losses["rpn"]["total_loss"] = torch.mean(torch.cat(rpn_losses["bweighted_loss"], 0))
         bbbox_lvl0, bgt_target, brpn_conf = rpn_output
+
+        if sparse_pretrain:
+            return None, losses, rpn_analyses, {}
 
         # Dense Pipeline ----------------------------------------------------------------------------------------------
         x_e1, x_e2, x_d2 = self.backbone.validation_step(dense_features)
@@ -370,7 +400,7 @@ class Trainer:
         # Nocs
         binst_occ = [[x.squeeze() for x in compls] for compls in outputs["completion"]]
         noc_output, noc_losses, noc_analyses, noc_timings = self.noc.validation_step(
-            x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0, bgt_target_compl, binst_occ
+            x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0, bgt_target_compl, bscan_obj, binst_occ=binst_occ
         )
         losses["noc"] = noc_losses
         analyses["noc"] = noc_analyses
@@ -448,8 +478,10 @@ class Trainer:
                 torch.save(to_save, save_path)
 
             if self.epoch >= self.opt.start_saving_optimizer:
-                save_path = os.path.join(best_folder, "{}.pth".format("adam_best"))
-                torch.save(self.model_optimizer.state_dict(), save_path)
+                save_path_rpn = os.path.join(best_folder, "{}.pth".format("adam_best_rpn"))
+                torch.save(self.rpn_optimizer.state_dict(), save_path_rpn)
+                save_path_general = os.path.join(best_folder, "{}.pth".format("adam_best_general"))
+                torch.save(self.general_optimizer.state_dict(), save_path_general)
 
         else:
             save_folder = os.path.join(self.log_path, "models", "epoch_{}".format(self.epoch+1))
@@ -462,12 +494,14 @@ class Trainer:
                 torch.save(to_save, save_path)
 
             if self.epoch >= self.opt.start_saving_optimizer:
-                save_path = os.path.join(save_folder, "{}.pth".format("adam"))
-                torch.save(self.model_optimizer.state_dict(), save_path)
+                save_path_rpn = os.path.join(save_folder, "{}.pth".format("adam_best_rpn"))
+                torch.save(self.rpn_optimizer.state_dict(), save_path_rpn)
+                save_path_general = os.path.join(save_folder, "{}.pth".format("adam_best_general"))
+                torch.save(self.general_optimizer.state_dict(), save_path_general)
 
     def _save_valmodel(self, losses):
 
-        mean_loss = losses[self.loss_key]
+        mean_loss = losses
 
         json_path = os.path.join(self.opt.log_dir, 'val_metrics.json')
         if os.path.exists(json_path):

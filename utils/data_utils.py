@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import MinkowskiEngine as ME
-
+from dvis import dvis
 from utils.voxel_utils import binvox_rw
 
 def read_csv_mapping(path):
@@ -125,15 +125,12 @@ def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 192, 96], deb
     occupancy_grid[x, y, z] = 1
 
     if debug_mode:
-        np_grid = occupancy_grid.detach().cpu().numpy()
-        ax = plt.figure().add_subplot(projection='3d')
-        ax.voxels(np_grid, edgecolor='k')
-        plt.show()
+        dvis(occupancy_grid.to(torch.int), fmt='voxels')
 
     if as_padded_whl:
         occupancy_grid = xyz2whl(occupancy_grid, padded_size=padded_size)
 
-    return occupancy_grid, max_extensions.tolist()
+    return occupancy_grid.to(torch.int), max_extensions.tolist()
 
 def xyz2whl(occupancy_grid, padded_size=None):
     '''

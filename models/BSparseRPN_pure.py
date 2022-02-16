@@ -65,7 +65,7 @@ class BSparseRPN_pure(nn.Module):
             pred_conf = pred_conf[conf_mask]
             pred_reg_values = pred_reg_values[conf_mask]
             pred_delta_t = pred_reg_values[:, 2:5].contiguous() # translational distance obj center to voxel
-            pred_delta_s = pred_reg_values[:, 5:9].contiguous() # size + w
+            pred_delta_s = pred_reg_values[:, 5:9].contiguous() # size
 
             pred_center = pred_delta_t + pred_coords[conf_mask].cuda()
 
@@ -74,7 +74,7 @@ class BSparseRPN_pure(nn.Module):
             # merge fps points if spatially close
             pairwise_dist_fps = torch.cdist(pred_center[fps_indices].unsqueeze(0), pred_center[fps_indices].unsqueeze(0))[0]
 
-            pairwise_close = pairwise_dist_fps < np.sqrt(200)
+            pairwise_close = pairwise_dist_fps < np.sqrt(200) #
             centroid_clusters = []
             joint_ids = []
             
@@ -107,7 +107,7 @@ class BSparseRPN_pure(nn.Module):
             pred_bboxes = pred_bboxes[nms_filtered]
             pred_confs = pred_confs[nms_filtered]
 
-            min_size_filter = torch.all((pred_bboxes[:, 3:6] - pred_bboxes[:,:3]) >= 5, 1)
+            min_size_filter = torch.all((pred_bboxes[:, 3:6] - pred_bboxes[:,:3]) >= 5, 1) # extents larger 5 in discrete space
 
             # Breaks at size predicted boxes
             pred_bboxes = pred_bboxes[min_size_filter]
@@ -158,7 +158,7 @@ class BSparseRPN_pure(nn.Module):
         gt_coords_l, gt_reg_values_l = rpn_gt['breg_sparse'].decomposed_coordinates_and_features # gt occupancies N x 7
         for (pred_coords, pred_reg_values, gt_coords, gt_reg_values) in zip(pred_coords_l, pred_reg_values_l, gt_coords_l, gt_reg_values_l):
 
-            pos_mask = gt_reg_values[:, 0] > 0 # occupancy mask -> 0 # bce loss # occupied
+            pos_mask = gt_reg_values[:, 0] > 0 # calculated w > 0 # occupied
             #neg_mask = gt_reg_values[:, 0] == 0
 
             objness_loss = F.cross_entropy(pred_reg_values[:,:2], pos_mask.long()).unsqueeze(0)
@@ -167,8 +167,8 @@ class BSparseRPN_pure(nn.Module):
                 import pdb
                 pdb.set_trace()
 
-            # center coord, extent x,y,z similar to votenet
-            bbox_loss = F.smooth_l1_loss(pred_reg_values[pos_mask,2:]/10, gt_reg_values[pos_mask,1:]/10).unsqueeze(0)
+            # center coord, extent x,y,z similar to votenet, target = delta t and delta s
+            bbox_loss = F.smooth_l1_loss(pred_reg_values[pos_mask,2:]/10, gt_reg_values[pos_mask,1:]/10).unsqueeze(0) # removed division by 10
 
             bobjness_loss.append(objness_loss)
 

@@ -7,22 +7,55 @@ from torch.nn import init
 
 import sys
 
-def loss_to_logging(losses):
+def loss_to_logging(overall_losses):
 
     log_losses = dict()
-    for k, v in losses.items():
-        if k == 'rpn':
-            log_losses[k] = 0
-            for m in range(len(losses[k]['bweighted_loss'])):
-                log_losses[k] += v['bweighted_loss'][m].detach().cpu().item()
-            log_losses[k] /= len(losses[k]['bweighted_loss'])
-        elif k == 'completion' or k == 'noc':
-            log_losses[k] = 0
-            for m in range(len(losses[k]['bweighted_loss'])):
-                log_losses[k] += torch.mean(v['bweighted_loss'][m]).detach().cpu().item()
-            log_losses[k] /= len(losses[k]['bweighted_loss'])
-        else:
-            log_losses[k] = v
+    norm_coeff_rpn = 0
+    norm_coeff_comp = 0
+    norm_coeff_noc = 0
+    norm_coeff_total = 0
+
+    for losses in overall_losses:
+        for k, v in losses.items():
+
+            if k == 'rpn':
+                if 'rpn' not in log_losses:
+                    log_losses[k] = 0
+                for m in range(len(losses[k]['bweighted_loss'])):
+                    log_losses[k] += v['bweighted_loss'][m].detach().cpu().item()
+                    norm_coeff_rpn += 1
+
+            elif k == 'completion':
+                if 'completion' not in log_losses:
+                    log_losses[k] = 0
+                for m in range(len(losses[k]['bweighted_loss'])):
+                    log_losses[k] += torch.mean(v['bweighted_loss'][m]).detach().cpu().item()
+                    norm_coeff_comp += 1
+
+            elif k == 'noc':
+                if 'noc' not in log_losses:
+                    log_losses[k] = 0
+                for m in range(len(losses[k]['bweighted_loss'])):
+                    log_losses[k] += torch.mean(v['bweighted_loss'][m]).detach().cpu().item()
+                    norm_coeff_noc += 1
+
+            else:
+                norm_coeff_total += 1
+                if k not in log_losses:
+                    log_losses[k] = v
+                else:
+                    log_losses[k] += v
+
+    # Normalize loss
+    for k_l, v_l in log_losses.items():
+        if k_l == 'rpn':
+            log_losses[k_l] /= norm_coeff_rpn
+        if k_l == 'completion':
+            log_losses[k_l] /= norm_coeff_comp
+        if k_l == 'noc':
+            log_losses[k_l] /= norm_coeff_noc
+        if k_l == 'total_loss':
+            log_losses[k_l] /= norm_coeff_total
 
     return log_losses
 
