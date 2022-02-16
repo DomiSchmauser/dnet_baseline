@@ -115,7 +115,8 @@ class Front_dataset(Dataset):
 
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
-                        voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model.binvox')
+                        voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model_128.binvox')
+                        #print(voxel_path)
 
                         # Cad2World transformation in Blender Space
                         scale = np.array(anno['3Dscale'])
@@ -177,6 +178,7 @@ class Front_dataset(Dataset):
                         obj_anns.append(obj)
 
                 record['obj_anns'] = obj_anns
+                #dvis(record['obj_scan_mask'] > 0, fmt='voxels')
 
                 # Remove not used entries
                 del record['rgb'], record['pc_rgb'], record['depth_map']
