@@ -25,9 +25,13 @@ class Options:
                                  default=CONF.PATH.OUTPUT)
 
         # Model Parameters
-        self.parser.add_argument("--learning_rate",
+        self.parser.add_argument("--learning_rate_rpn",
                                  type=float,
-                                 help="learning rate",
+                                 help="learning rate rpn",
+                                 default=5e-3)
+        self.parser.add_argument("--learning_rate_general",
+                                 type=float,
+                                 help="learning rate general",
                                  default=1e-3)
         self.parser.add_argument("--weight_decay", # L2 Regularization
                                  type=float,
@@ -40,7 +44,7 @@ class Options:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=2)
+                                 default=1)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",

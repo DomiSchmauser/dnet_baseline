@@ -176,7 +176,7 @@ class BNocDec2(nn.Module):
             else:
                 loop_range = len(bbox_lvl0)
 
-            for j in range(loop_range):
+            for j in range(loop_range): # Per instance here -----------------------------------------------------------
                 if len(bbox_lvl0.shape) == 1:
                     bbox = bbox_lvl0
                 else:
@@ -206,7 +206,7 @@ class BNocDec2(nn.Module):
                 # using GT scale
                 scaled_pred_nocs = pred_noc_on_gt_inst * get_scale(noc2scan)[0]
 
-                pred_scaled_noc2scan_t, pred_scaled_noc2scan_R = self.nocs_to_tr(scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3])
+                pred_scaled_noc2scan_t, pred_scaled_noc2scan_R = self.nocs_to_tr(scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3]) # shift to true coords
                 s = torch.diag(get_scale(noc2scan)[:3]).cuda().to(torch.float32)
                 pred_noc2scan_R = pred_scaled_noc2scan_R @ s
                 pred_noc2scan_t = pred_scaled_noc2scan_t

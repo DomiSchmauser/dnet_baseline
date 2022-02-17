@@ -78,7 +78,7 @@ class BCompletionDec2(nn.Module):
         bweighted_loss = []
         for B in range(len(bbbox_lvl0)):
 
-            # Get occupancy values
+            # Get occupancy values of completed map
             scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbbox_lvl0[B]) # Unsqueeze for loop later
 
             # Could also just insert 1 for values > than 0

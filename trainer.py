@@ -91,10 +91,10 @@ class Trainer:
         #self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, 15, 0.5)
 
         # Optimizer --------------------------------------------------------------------------------------------------
-        self.rpn_optimizer = optim.Adam(self.parameters_rpn, self.opt.learning_rate,
+        self.rpn_optimizer = optim.Adam(self.parameters_rpn, self.opt.learning_rate_rpn,
                                           weight_decay=self.opt.weight_decay)
 
-        self.general_optimizer = optim.Adam(self.parameters_general, self.opt.learning_rate,
+        self.general_optimizer = optim.Adam(self.parameters_general, self.opt.learning_rate_general,
                                         weight_decay=self.opt.weight_decay)
         # Dataset ----------------------------------------------------------------------------------------------------
         DATA_DIR = CONF.PATH.FRONTDATA
@@ -173,7 +173,7 @@ class Trainer:
 
             self.run_epoch(sparse_pretrain=sparse_pretrain)
             if (self.epoch+1) % self.opt.save_frequency == 0 \
-                    and self.opt.save_model and (self.epoch+1) >= self.opt.start_saving:
+                    and self.opt.save_model and (self.epoch+1) >= self.opt.start_saving and not sparse_pretrain:
                 self.save_model(is_val=False)
 
     def val(self, sparse_pretrain=False):
@@ -225,6 +225,8 @@ class Trainer:
     def run_epoch(self, sparse_pretrain=False):
         self.set_train()
 
+        rotation_diff = []
+        location_diff = []
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
             _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain)
@@ -247,6 +249,11 @@ class Trainer:
 
                 losses['total_loss'] = loss.item() + rpn_loss.item()  # release graph after backprop
 
+                for b_idx, scan_rot_diff in enumerate(analyses['noc']['rot_angle_diffs']):
+                    for inst_idx in range(len(scan_rot_diff)):
+                        rotation_diff.append(torch.unsqueeze(scan_rot_diff[inst_idx].detach().cpu(), dim=0))
+                        location_diff.append(torch.unsqueeze(analyses['noc']['transl_diffs'][b_idx][inst_idx].detach().cpu(), dim=0))
+
                 self.rpn_optimizer.step()
                 self.general_optimizer.step()
 
@@ -264,6 +271,8 @@ class Trainer:
 
             self.step += 1
         #self.model_lr_scheduler.step()
+        if not sparse_pretrain:
+            print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*0.03)
         self.val(sparse_pretrain=sparse_pretrain)
 
     def training_step(self, inputs, sparse_pretrain=False):
@@ -307,7 +316,7 @@ class Trainer:
         for B, (bbox_lvl0, gt_target) in enumerate(zip(bbbox_lvl0, bgt_target)):
             inst_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbox_lvl0)
 
-            target_num_occs = [(bscan_obj[B][str(obj_idx)]['num_occ'] != 0).sum() for obj_idx in gt_target] # number of occupancies per object
+            target_num_occs = [bscan_obj[B][str(obj_idx)]['num_occ'] for obj_idx in gt_target] # number of occupancies per object
             inst_occ_targets = [(inst_crop == int(obj_idx)).unsqueeze(0) for obj_idx, inst_crop in
                                 zip(gt_target, inst_crops)]
             valid_inst_occ_target = []

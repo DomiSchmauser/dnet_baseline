@@ -29,7 +29,8 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.03):
 
     # Y axis starts at 0 in cad space and is not centered
     nonzero_inds = np.nonzero(bin_vox)[:-1]
-    points = nonzero_inds / 31
+    max_value = bin_vox.shape[0] - 1
+    points = nonzero_inds / max_value
     shift_y = points.numpy()[:, 1].min()
     noc2cad[:3, 3] = np.array([-0.5, -shift_y, -0.5])
 
@@ -42,6 +43,7 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.03):
 def occ2noc(cropped_obj, box_3d, euler_rot):
     '''
     Get occ coords of a cropped object, transform to noc space
+    Height object is y coord
     '''
     euler = mathutils.Euler(euler_rot)
     rot = np.array(euler.to_matrix())
@@ -65,6 +67,13 @@ def occ2noc(cropped_obj, box_3d, euler_rot):
 
     noc = np.vstack((x_noc, y_noc, z_noc))
 
+    '''
+    nocs_pcd = o3d.geometry.PointCloud()
+    nocs_pcd.points = o3d.utility.Vector3dVector(noc.T)
+    nocs_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])
+    o3d.visualization.draw_geometries([nocs_pcd, nocs_origin])
+    '''
+
     noc_obj = np.zeros((3, cropped_obj.shape[0], cropped_obj.shape[1], cropped_obj.shape[2]))
     noc_obj[:, crop_idxs[0], crop_idxs[1], crop_idxs[2]] = noc
 
@@ -80,6 +89,7 @@ def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03):
 
     # Voxel space to CAD space
     nonzero_inds = np.nonzero(voxel_grid)[:-1]
+    max_value = voxel_grid.shape[0] - 1
     points = nonzero_inds / 31 - 0.5
     points = points.numpy()
     points[:, 1] -= points[:, 1].min() # CAD space y is shifted up to start at 0

@@ -26,13 +26,18 @@ class Front_dataset(Dataset):
         self.split = split
         self.data_dir = os.path.join(base_dir, self.split)
         self.scenes = [f for f in os.listdir(os.path.abspath(self.data_dir))]
+        self.overfit = False
 
         self.imgs = []
         for scene in self.scenes:
             scene_path = os.path.join(self.data_dir, scene, "coco_data")
             scene_imgs = [os.path.join(scene_path, img) for img in os.listdir(scene_path) if 'rgb' in img]
             scene_imgs.sort()
-            self.imgs += scene_imgs
+
+            if self.overfit:
+                self.imgs.append(scene_imgs[0])
+            else:
+                self.imgs += scene_imgs
 
         mapping_file_path = os.path.join(base_dir, "3D_front_mapping.csv")
         _, self.csv_dict = read_csv_mapping(mapping_file_path)
