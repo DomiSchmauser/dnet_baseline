@@ -28,7 +28,7 @@ class Options:
         self.parser.add_argument("--learning_rate_rpn",
                                  type=float,
                                  help="learning rate rpn",
-                                 default=5e-3)
+                                 default=1e-3)
         self.parser.add_argument("--learning_rate_general",
                                  type=float,
                                  help="learning rate general",
@@ -36,7 +36,7 @@ class Options:
         self.parser.add_argument("--weight_decay", # L2 Regularization
                                  type=float,
                                  help="weight decay",
-                                 default=0) # 1e-4
+                                 default=1e-4) # 1e-4
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
@@ -85,12 +85,12 @@ class Options:
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
                                  help="folder of pretrain model",
-                                 default=os.path.join(file_dir, "model/pretrained"))
+                                 default=os.path.join(file_dir, "pretrained"))
 
         self.parser.add_argument("--models_to_load",
                                  type=list,
                                  help="pretrained model to load",
-                                 default=['edge_classifier', 'voxel_encoder', 'graph_net'])
+                                 default=['completion', 'dense_backbone', 'nocs', 'rpn', 'sparse_backbone'])
 
     def parse(self):
         self.options = self.parser.parse_args()

@@ -54,6 +54,7 @@ class Trainer:
         # Model setup --------------------------------------------------------------------------------------------------
         cfg = init_cfg()
         self.sparse_pretrain_ep = cfg['general']['sparse_pretrain_epochs']
+        self.dense_pretrain_ep = cfg['general']['dense_pretrain_epochs']
 
         # Sparse Backbone & RPN
         self.models["sparse_backbone"] = networks.PureSparseBackboneCol_Res1(conf=cfg['sparse_backbone'])
@@ -163,20 +164,27 @@ class Trainer:
             self.load_model()
 
         for self.epoch in range(self.opt.num_epochs):
+
             print('Start training ...')
             if self.epoch < self.sparse_pretrain_ep:
                 sparse_pretrain = True
+                dense_pretrain = False
                 print('Sparse network pretraining ...')
+            elif self.epoch < self.sparse_pretrain_ep + self.dense_pretrain_ep:
+                sparse_pretrain = False
+                dense_pretrain = True
+                print('Dense network pretraining ...')
             else:
                 sparse_pretrain = False
+                dense_pretrain = False
                 print('Full pipeline training ...')
 
-            self.run_epoch(sparse_pretrain=sparse_pretrain)
+            self.run_epoch(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
             if (self.epoch+1) % self.opt.save_frequency == 0 \
                     and self.opt.save_model and (self.epoch+1) >= self.opt.start_saving and not sparse_pretrain:
                 self.save_model(is_val=False)
 
-    def val(self, sparse_pretrain=False):
+    def val(self, sparse_pretrain=False, dense_pretrain=False):
         self.set_eval()
 
         print("Starting evaluation ...")
@@ -184,12 +192,15 @@ class Trainer:
         for batch_idx, inputs in enumerate(self.val_loader):
 
             with torch.no_grad():
-                outputs, losses, analyses, _ = self.validation_step(inputs, sparse_pretrain=sparse_pretrain)
+                outputs, losses, analyses, _ = self.validation_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
                 overall_losses.append(losses)
 
-                if sparse_pretrain:
+                if sparse_pretrain and not dense_pretrain:
                     rpn_loss = losses['rpn']['total_loss']
                     losses['total_loss'] = rpn_loss.item()
+                elif not sparse_pretrain and dense_pretrain:
+                    loss = losses['total_loss']
+                    losses['total_loss'] = loss.item()
                 else:
                     rpn_loss = losses['rpn']['total_loss']
                     loss = losses['total_loss']
@@ -204,39 +215,48 @@ class Trainer:
         log_losses = loss_to_logging(overall_losses)
         self.log("val", log_losses)
 
-        self._save_valmodel(log_losses['total_loss'])
+        if not sparse_pretrain and not dense_pretrain:
+            self._save_valmodel(log_losses['total_loss'])
         del inputs, outputs, losses, overall_losses
 
         self.set_train()
 
     def inference(self):
         """
-        Run the entire inference pipeline
+        Run the entire inference pipeline and perform tracking afterwards
         """
         print("Starting inference and loading models ...")
         self.start_time = time.time()
         self.load_model()
         self.set_eval()
 
-        for batch_idx, inputs in enumerate(self.test_loader):
+        for batch_idx, inputs in enumerate(self.val_loader):
             with torch.no_grad():
-                outputs = self.infer_step(inputs)
+                outputs, bscan_info = self.infer_step(inputs)
 
-    def run_epoch(self, sparse_pretrain=False):
+    def run_epoch(self, sparse_pretrain=False, dense_pretrain=False):
         self.set_train()
 
         rotation_diff = []
         location_diff = []
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
-            _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain)
+            _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 
-            if sparse_pretrain:
+            if sparse_pretrain and not dense_pretrain:
                 rpn_loss = losses['rpn']['total_loss']
                 self.rpn_optimizer.zero_grad()
                 rpn_loss.backward()
                 losses['total_loss'] = rpn_loss.item()  # release graph after backprop
                 self.rpn_optimizer.step()
+
+            elif not sparse_pretrain and dense_pretrain:
+                loss = losses['total_loss']
+                self.general_optimizer.zero_grad()
+                loss.backward()
+                losses['total_loss'] = loss.item()   # release graph after backprop
+                self.general_optimizer.step()
+
             else:
                 rpn_loss = losses['rpn']['total_loss']
                 loss = losses['total_loss']
@@ -271,11 +291,11 @@ class Trainer:
 
             self.step += 1
         #self.model_lr_scheduler.step()
-        if not sparse_pretrain:
+        if not sparse_pretrain and not dense_pretrain:
             print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*0.03)
-        self.val(sparse_pretrain=sparse_pretrain)
+        self.val(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 
-    def training_step(self, inputs, sparse_pretrain=False):
+    def training_step(self, inputs, sparse_pretrain=False, dense_pretrain=False):
         '''
         One general training step of the whole network pipeline
         Inputs: Batch of num sequences
@@ -355,7 +375,7 @@ class Trainer:
 
         return None, losses, analyses, {}
 
-    def validation_step(self, inputs, sparse_pretrain=False):
+    def validation_step(self, inputs, sparse_pretrain=False, dense_pretrain=False):
         '''
         One general validation step of the whole network pipeline
         '''
@@ -454,7 +474,7 @@ class Trainer:
         noc_output = self.noc_infer.infer_step(x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0, binst_occ)
         outputs["noc"] = noc_output
 
-        return outputs
+        return outputs, rpn_features[-1]
 
     def log(self, mode, losses):
         """Write an event to the tensorboard events file
@@ -546,8 +566,6 @@ class Trainer:
         print("Loading model from folder {}".format(self.opt.load_weights_folder))
 
         for n in self.opt.models_to_load:
-            if n == 'graph_net':
-                continue
             print("Loading {} weights...".format(n))
             path = os.path.join(self.opt.load_weights_folder, "{}.pth".format(n))
             model_dict = self.models[n].state_dict()
@@ -556,12 +574,21 @@ class Trainer:
             model_dict.update(pretrained_dict)
             self.models[n].load_state_dict(model_dict)
 
-        # loading adam state
-        optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam.pth")
+        # loading rpn adam state
+        optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam_rpn.pth")
         if os.path.isfile(optimizer_load_path):
             print("Loading Adam weights")
             optimizer_dict = torch.load(optimizer_load_path)
-            self.model_optimizer.load_state_dict(optimizer_dict)
+            self.rpn_optimizer.load_state_dict(optimizer_dict)
+        else:
+            print("Cannot find Adam weights so Adam is randomly initialized")
+
+        # loading general adam state
+        optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam_general.pth")
+        if os.path.isfile(optimizer_load_path):
+            print("Loading Adam weights")
+            optimizer_dict = torch.load(optimizer_load_path)
+            self.general_optimizer.load_state_dict(optimizer_dict)
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")
 

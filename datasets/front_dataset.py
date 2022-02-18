@@ -5,8 +5,6 @@ import json
 import h5py
 import torch
 import MinkowskiEngine as ME
-import open3d as o3d
-import matplotlib.pyplot as plt
 import mathutils
 
 from torch.utils.data import Dataset
@@ -77,6 +75,7 @@ class Front_dataset(Dataset):
                 rgb_path = os.path.join(seq_path, 'coco_data', 'rgb_' + str(idx).zfill(4) + '.png')
 
                 record["seq_path"] = seq_path
+                record["rgb_path"] = rgb_path
                 record["height"] = v['height']
                 record["width"] = v['width']
                 record["depth_map"], record['campose'], cx, cy = load_hdf5(hdf5_path)

@@ -6,7 +6,9 @@ def init_cfg():
     '''
     model_cfg = {
         'general': {
-            'sparse_pretrain_epochs': 35,
+            'overfit': False,
+            'sparse_pretrain_epochs': 40,
+            'dense_pretrain_epochs': 40,
         },
         'sparse_backbone': {
             'num_features': 30,
