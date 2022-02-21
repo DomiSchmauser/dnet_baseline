@@ -1,6 +1,6 @@
 from pathlib import Path
 import shutil
-from DData import DSeq
+
 
 def merge2seq(exp_dir, val_mode):
     seq_dict = dict()

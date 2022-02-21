@@ -17,6 +17,7 @@ from torchvision import transforms
 from torch.nn import functional as F
 import MinkowskiEngine as ME
 import open3d as o3d
+from pathlib import Path
 
 from dvis import dvis
 
@@ -27,9 +28,11 @@ sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
 from model_cfg import init_cfg
-from utils.train_utils import sec_to_hm_str, _sparsify, loss_to_logging
+from utils.train_utils import sec_to_hm_str, loss_to_logging
 from utils.net_utils import vg_crop
-from datasets.sequence_chunking import chunk_sequence, batch_collate
+from utils.scan_merge import merge2seq
+from datasets.sequence_chunking import batch_collate
+from evaluate import evaluate
 
 # Model import
 from models.BCompletionDec2 import BCompletionDec2
@@ -44,6 +47,7 @@ class Trainer:
     def __init__(self, options):
         self.opt = options
         self.log_path = CONF.PATH.OUTPUT
+        self.experiment_dir = CONF.PATH.STORAGE
 
         self.models = {}
         self.parameters_rpn = []
@@ -221,7 +225,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self):
+    def inference(self, store_results=True, merge_seq=False):
         """
         Run the entire inference pipeline and perform tracking afterwards
         """
@@ -230,9 +234,28 @@ class Trainer:
         self.load_model()
         self.set_eval()
 
+        collection_eval_df = pd.DataFrame()
+        collection_gt_eval_df = pd.DataFrame()
+
         for batch_idx, inputs in enumerate(self.val_loader):
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
+
+                eval_df, gt_eval_df = evaluate(outputs, inputs, None, None)
+                collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
+                collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
+                                                                ignore_index=True)
+
+        if store_results:
+            # store evaluations
+            eval_dir = Path(self.experiment_dir, 'evaluations', 'inference')
+            os.makedirs(eval_dir, exist_ok=True)
+
+            collection_eval_df.to_csv(Path(eval_dir, 'collection.csv'), index=False)
+            collection_gt_eval_df.to_csv(Path(eval_dir, 'collection_gt.csv'), index=False)
+
+        if merge_seq:
+            merge2seq(self.experiment_dir, "inference")
 
     def run_epoch(self, sparse_pretrain=False, dense_pretrain=False):
         self.set_train()

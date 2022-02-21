@@ -1,59 +1,334 @@
-import sys
 import torch
 import numpy as np
-import open3d as o3d
-import mathutils
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 
-from sklearn.metrics import recall_score
-from sklearn.metrics import precision_score
-from sklearn.metrics import f1_score
+def mask_iou(pred, gt, batch_size):
+    return ((pred & gt).reshape(batch_size, -1).sum(1).float() / (pred | gt).reshape(batch_size, -1).sum(1).float()).item()
 
-#from Tracking.utils.train_utils import convert_voxel_to_pc
-
-
-def get_precision(predictions, targets):
-
-    # Binarize predictions
-    predictions[predictions >= 0.5] = 1
-    predictions[predictions < 0.5] = 0
-
-    precision = precision_score(targets, predictions, zero_division=0)
-    return precision
-
-def get_recall(predictions, targets):
-
-    # Binarize predictions
-    predictions[predictions >= 0.5] = 1
-    predictions[predictions < 0.5] = 0
-
-    recall = recall_score(targets, predictions, zero_division=0)
-    return recall
-
-def get_f1(predictions, targets):
-
-    # Binarize predictions
-    predictions[predictions >= 0.5] = 1
-    predictions[predictions < 0.5] = 0
-
-    f1 = f1_score(targets, predictions, zero_division='warn') # warn only once
-    return f1
-
-def get_MOTA(predictions, targets, gt_objects, misses, fps):
-    '''
-    Full val/test set MOTA calculations
-    MOTA score: 1 - num_misses + false positives + id_switches / total num_objects in all frames
-    false_positives: Predicted 3D BBOX does not overlap with any GT 3D BBOX more than a threshold e.g. 0.2 IoU
-    num_misses: For a GT 3D BBOX there exist no predicted 3D BBOX which overlaps more than min threshold, or less pred than gt objects
-    id_switches: GT trajectory and predicted trajectory have do not match in object identities, predicted active/nonactive edge incorrect
-    '''
-
-    # Binarize predictions
-    predictions[predictions >= 0.5] = 1
-    predictions[predictions < 0.5] = 0
-
-    id_switches = np.count_nonzero(targets - predictions)
-    MOTA = 1.0 - (float(misses + fps + id_switches) / float(gt_objects))
-
-    return MOTA, id_switches
+def l1_acc(pred, gt, l1_thresh):
+    return (torch.all(torch.abs(pred - gt) <= l1_thresh, 1).sum().float() / len(gt)).item()
 
 
+
+def mpl_plot(x,y, x_label, y_label, col='b'):
+    fig, ax = plt.subplots()
+    if x_label is not None:
+        ax.set_xlabel(x_label)
+    if y_label is not None:
+        ax.set_ylabel(y_label)
+    
+    ax.plot(x, y, '%s%s%s'%('',col,'-'))
+    try:
+        ax.xaxis.set_ticks(np.arange(x.min(), x.max() + 0.1, (x.max() + 0.1 - x.min()) / 10))
+    except:
+        pass
+    ax.xaxis.set_major_formatter(ticker.FormatStrFormatter('%0.2f'))
+    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%0.2f'))
+    #ax.yaxis.set_ticks(np.arange(y.min(), y.max(), (y.max()-y.min())/10))
+    return fig 
+
+# Copyright (c) Facebook, Inc. and its affiliates.
+# 
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tr
+
+def voc_ap(rec, prec, use_07_metric=False):
+    """ ap = voc_ap(rec, prec, [use_07_metric])
+    Compute VOC AP given precision and recall.
+    If use_07_metric is true, uses the
+    VOC 07 11 point method (default:False).
+    """
+    if use_07_metric:
+        # 11 point metric
+        ap = 0.
+        for t in np.arange(0., 1.1, 0.1):
+            if np.sum(rec >= t) == 0:
+                p = 0
+            else:
+                p = np.max(prec[rec >= t])
+            ap = ap + p / 11.
+    else:
+        # correct AP calculation
+        # first append sentinel values at the end
+        mrec = np.concatenate(([0.], rec, [1.]))
+        mpre = np.concatenate(([0.], prec, [0.]))
+
+        # compute the precision envelope
+        for i in range(mpre.size - 1, 0, -1):
+            mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+        # to calculate area under PR curve, look for points
+        # where X axis (recall) changes value
+        i = np.where(mrec[1:] != mrec[:-1])[0]
+
+        # and sum (\Delta recall) * prec
+        ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap
+
+
+
+def eval_det_prematched(pred, gt, ovthresh=0.25, use_07_metric=False):
+    """ Generic functions to compute precision/recall for object detection
+        for a single class with prematched gt targets.
+        Input:
+            pred: map of {frame_id: [(gt_target, score, iou)]} where bbox is numpy array
+            gt: map of {frame_id: [obj_id]
+            ovthresh: scalar, iou threshold
+            use_07_metric: bool, if True use VOC07 11 point method
+        Output:
+            rec: numpy array of length nd
+            prec: numpy array of length nd
+            ap: scalar, average precision
+    """
+    recs = {} # {img_id: {'obj_id': bbox list, 'det': matched list}}
+    npos = 0
+    for frame_id in gt.keys():
+        obj_ids = gt[frame_id]
+        det = [False] * len(obj_ids)
+        npos += len(obj_ids)
+        recs[frame_id] = {obj_id: False for obj_id in obj_ids}
+    # pad empty list to all other frameids (shouldnt happen)
+    for frame_id in pred.keys():
+        if frame_id not in gt:
+            recs[frame_id] = {} 
+
+    # construct dets
+    frame_ids = []
+    confidence = []
+    
+    gt_targets = []
+    ious = []
+
+    for frame_id in pred.keys():
+        for gt_target, score, iou in pred[frame_id]:
+            frame_ids.append(frame_id)
+            confidence.append(score)
+            gt_targets.append(gt_target)
+            ious.append(iou)
+
+    confidence = np.array(confidence)
+    # sort by confidence
+    sorted_inds = np.argsort(-confidence)
+
+    frame_ids = [frame_ids[x] for x in sorted_inds]
+    gt_targets = [gt_targets[x] for x in sorted_inds]
+    ious = [ious[x] for x in sorted_inds]
+
+    confidence = confidence[sorted_inds]
+
+    # go down dets and mark TPs and FPs
+    nd = len(frame_ids) # = #proposals
+    tp = np.zeros(nd)
+    fp = np.zeros(nd)
+
+    for d in range(nd):
+        #if d%100==0: print(d)
+        if ious[d] > ovthresh:
+            if not recs[frame_ids[d]][gt_targets[d]]:
+                tp[d] = 1.
+                recs[frame_ids[d]][gt_targets[d]] = 1
+            else:
+                fp[d] = 1.
+        else:
+            fp[d] = 1.
+        
+
+    # compute precision recall
+    fp = np.cumsum(fp)
+    tp = np.cumsum(tp)
+    rec = tp / float(npos)
+    #print('NPOS: ', npos)
+    # avoid divide by zero in case the first detection matches a difficult
+    # ground truth
+    prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
+    ap = voc_ap(rec, prec, use_07_metric)
+
+    return rec, prec, ap, confidence
+
+
+'''
+if False:
+
+    def eval_det_cls(pred, gt, ovthresh=0.25, use_07_metric=False):
+        """ Generic functions to compute precision/recall for object detection
+            for a single class.
+            Input:
+                pred: map of {img_id: [(bbox, score, iou)]} where bbox is numpy array
+                gt: map of {img_id: [bbox]}
+                ovthresh: scalar, iou threshold
+                use_07_metric: bool, if True use VOC07 11 point method
+            Output:
+                rec: numpy array of length nd
+                prec: numpy array of length nd
+                ap: scalar, average precision
+        """
+
+        # construct gt objects
+        class_recs = {} # {img_id: {'bbox': bbox list, 'det': matched list}}
+        npos = 0
+        for img_id in gt.keys():
+            bbox = np.array(gt[img_id])
+            det = [False] * len(bbox)
+            npos += len(bbox)
+            class_recs[img_id] = {'bbox': bbox, 'det': det}
+        # pad empty list to all other imgids
+        for img_id in pred.keys():
+            if img_id not in gt:
+                class_recs[img_id] = {'bbox': np.array([]), 'det': []}
+
+        # construct dets
+        image_ids = []
+        confidence = []
+        BB = []
+        for img_id in pred.keys():
+            for box,score in pred[img_id]:
+                image_ids.append(img_id)
+                confidence.append(score)
+                BB.append(box)
+        confidence = np.array(confidence)
+        BB = np.array(BB) # (nd,4 or 8,3 or 6)
+
+        # sort by confidence
+        sorted_ind = np.argsort(-confidence)
+        sorted_scores = np.sort(-confidence)
+        BB = BB[sorted_ind, ...]
+        image_ids = [image_ids[x] for x in sorted_ind]
+
+        # go down dets and mark TPs and FPs
+        nd = len(image_ids)
+        tp = np.zeros(nd)
+        fp = np.zeros(nd)
+        for d in range(nd):
+            #if d%100==0: print(d)
+            R = class_recs[image_ids[d]]
+            bb = BB[d, ...].astype(float)
+
+            ovmax = -np.inf
+            BBGT = R['bbox'].astype(float)
+
+            if BBGT.size > 0:
+                # compute overlaps
+                for j in range(BBGT.shape[0]):
+                    iou = get_iou_main(get_iou_func, (bb, BBGT[j,...]))
+                    if iou > ovmax:
+                        ovmax = iou
+                        jmax = j
+
+            #print d, ovmax
+            if ovmax > ovthresh:
+                if not R['det'][jmax]:
+                    tp[d] = 1.
+                    R['det'][jmax] = 1
+                else:
+                    fp[d] = 1.
+            else:
+                fp[d] = 1.
+
+        # compute precision recall
+        fp = np.cumsum(fp)
+        tp = np.cumsum(tp)
+        rec = tp / float(npos)
+        #print('NPOS: ', npos)
+        # avoid divide by zero in case the first detection matches a difficult
+        # ground truth
+        prec = tp / np.maximum(tp + fp, np.finfo(np.float64).eps)
+        ap = voc_ap(rec, prec, use_07_metric)
+
+        return rec, prec, ap
+
+    def eval_det_cls_wrapper(arguments):
+        pred, gt, ovthresh, use_07_metric, get_iou_func = arguments
+        rec, prec, ap = eval_det_cls(pred, gt, ovthresh, use_07_metric, get_iou_func)
+        return (rec, prec, ap)
+
+    def eval_det(pred_all, gt_all, ovthresh=0.25, use_07_metric=False, get_iou_func=get_iou):
+        """ Generic functions to compute precision/recall for object detection
+            for multiple classes.
+            Input:
+                pred_all: map of {img_id: [(classname, bbox, score)]}
+                gt_all: map of {img_id: [(classname, bbox)]}
+                ovthresh: scalar, iou threshold
+                use_07_metric: bool, if true use VOC07 11 point method
+            Output:
+                rec: {classname: rec}
+                prec: {classname: prec_all}
+                ap: {classname: scalar}
+        """
+        pred = {} # map {classname: pred}
+        gt = {} # map {classname: gt}
+        for img_id in pred_all.keys():
+            for classname, bbox, score in pred_all[img_id]:
+                if classname not in pred: pred[classname] = {}
+                if img_id not in pred[classname]:
+                    pred[classname][img_id] = []
+                if classname not in gt: gt[classname] = {}
+                if img_id not in gt[classname]:
+                    gt[classname][img_id] = []
+                pred[classname][img_id].append((bbox,score))
+        for img_id in gt_all.keys():
+            for classname, bbox in gt_all[img_id]:
+                if classname not in gt: gt[classname] = {}
+                if img_id not in gt[classname]:
+                    gt[classname][img_id] = []
+                gt[classname][img_id].append(bbox)
+
+        rec = {}
+        prec = {}
+        ap = {}
+        for classname in gt.keys():
+            print('Computing AP for class: ', classname)
+            rec[classname], prec[classname], ap[classname] = eval_det_cls(pred[classname], gt[classname], ovthresh, use_07_metric, get_iou_func)
+            print(classname, ap[classname])
+        
+        return rec, prec, ap 
+
+    from multiprocessing import Pool
+    def eval_det_multiprocessing(pred_all, gt_all, ovthresh=0.25, use_07_metric=False, get_iou_func=get_iou):
+        """ Generic functions to compute precision/recall for object detection
+            for multiple classes.
+            Input:
+                pred_all: map of {img_id: [(classname, bbox, score)]}
+                gt_all: map of {img_id: [(classname, bbox)]}
+                ovthresh: scalar, iou threshold
+                use_07_metric: bool, if true use VOC07 11 point method
+            Output:
+                rec: {classname: rec}
+                prec: {classname: prec_all}
+                ap: {classname: scalar}
+        """
+        pred = {} # map {classname: pred}
+        gt = {} # map {classname: gt}
+        for img_id in pred_all.keys():
+            for classname, bbox, score in pred_all[img_id]:
+                if classname not in pred: pred[classname] = {}
+                if img_id not in pred[classname]:
+                    pred[classname][img_id] = []
+                if classname not in gt: gt[classname] = {}
+                if img_id not in gt[classname]:
+                    gt[classname][img_id] = []
+                pred[classname][img_id].append((bbox,score))
+        for img_id in gt_all.keys():
+            for classname, bbox in gt_all[img_id]:
+                if classname not in gt: gt[classname] = {}
+                if img_id not in gt[classname]:
+                    gt[classname][img_id] = []
+                gt[classname][img_id].append(bbox)
+
+        rec = {}
+        prec = {}
+        ap = {}
+        p = Pool(processes=10)
+        ret_values = p.map(eval_det_cls_wrapper, [(pred[classname], gt[classname], ovthresh, use_07_metric, get_iou_func) for classname in gt.keys() if classname in pred])
+        p.close()
+        for i, classname in enumerate(gt.keys()):
+            if classname in pred:
+                rec[classname], prec[classname], ap[classname] = ret_values[i]
+            else:
+                rec[classname] = 0
+                prec[classname] = 0
+                ap[classname] = 0
+            print(classname, ap[classname])
+        
+        return rec, prec, ap 
+'''

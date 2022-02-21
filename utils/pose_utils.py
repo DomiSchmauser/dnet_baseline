@@ -79,7 +79,7 @@ def occ2noc(cropped_obj, box_3d, euler_rot):
 
     return noc_obj
 
-def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03):
+def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03, max_extensions=None):
     '''
     euler rotation: CAD2World space in Blender coord space
     '''
@@ -114,9 +114,9 @@ def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03):
     y_min, y_max = bbox[1], bbox[4]
     z_min, z_max = bbox[2], bbox[5]
 
-    x_scaled = np.rint(minmax_scale(coords[:, 0], feature_range=(x_min, x_max))).astype(np.int)
-    y_scaled = np.rint(minmax_scale(coords[:, 1], feature_range=(y_min, y_max))).astype(np.int)
-    z_scaled = np.rint(minmax_scale(coords[:, 2], feature_range=(z_min, z_max))).astype(np.int)
+    x_scaled = np.clip(np.rint(minmax_scale(coords[:, 0], feature_range=(x_min, x_max))).astype(np.int), 0, max_extensions[0])
+    y_scaled = np.clip(np.rint(minmax_scale(coords[:, 1], feature_range=(y_min, y_max))).astype(np.int), 0, max_extensions[1])
+    z_scaled = np.clip(np.rint(minmax_scale(coords[:, 2], feature_range=(z_min, z_max))).astype(np.int), 0, max_extensions[2])
 
     grid[x_scaled,y_scaled,z_scaled] = 1
 

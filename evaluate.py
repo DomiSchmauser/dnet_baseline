@@ -1,75 +1,75 @@
 import numpy as np
 import torch
 
-from conf import cfg
+
 import logging
+import re
 
 import json
 from datetime import datetime
-from utils.timer import Timer, AverageMeter
-from utils.model_storage import snapshot, store_history
-from hydra.utils import get_original_cwd as org_cwd
+#from utils.timer import Timer, AverageMeter
+#from utils.model_storage import snapshot, store_history
+
 from utils.net_utils import iou3d
 from pathlib import Path
 
-from sty import fg, bg, ef, rs, RgbFg
 import pdb
 
-from utils.import_util import import_cls
 from utils.net_utils import merge_dict, vg_crop, rotation_matrix_to_angle_axis
 from typing import Optional, List
 
 
-from DData import DScan, BDScan, DSeq
 from dvis import dvis
 import pandas as pd
-from utils.eval_utils import eval_det_prematched
 
+from utils.eval_utils import eval_det_prematched
 from utils.eval_utils import mask_iou, l1_acc, mpl_plot
 
 log = logging.getLogger(__name__)
 
 
-def evaluate(outputs, blobs, losses=None, analyses=None):
-    if cfg.datahandler.data_format == 'DSeq':
-        return evaluate_dseq(outputs, blobs, losses, analyses)
-    elif cfg.datahandler.data_format == 'BDScan':
-        return evaluate_bdscan(outputs, blobs, losses, analyses)
-    elif cfg.datahandler.data_format == 'BTDScan':
-        return evaluate_bdscan(outputs, blobs, losses, analyses)
-    elif cfg.datahandler.data_format == 'DScan':
-        return evaluate_dscan(outputs, blobs, losses, analyses)
-    else:
-        log.error('Data format for evaluation unknown')
+def evaluate(outputs, inputs, losses=None, analyses=None):
 
+    return evaluate_bdscan(outputs, inputs, losses, analyses)
 
+def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
 
-def evaluate_dseq(outputs, dseq: DSeq, losses=None, analyses=None):
-    dseq_df = pd.DataFrame()
-    for scan_idx, dscan in dseq.scans.items():
-        dscan_df = evaluate_dscan(outputs[scan_idx], dscan, losses[scan_idx], analyses[scan_idx])
-        dseq_df = pd.concat([dseq_df, dscan_df], axis=0, ignore_index=True)
-    return dseq_df
+    # Unpack inputs
+    dense_features, sparse_features, rpn_features = inputs
 
-def evaluate_bdscan(outputs, bdscan: BDScan, losses=None, analyses=None):
-    dscan_list = bdscan.to_dscan_list()
+    rpn_gt = {}
+    rpn_gt['breg_sparse'] = rpn_features[0]
+    rpn_gt['scan_shape'] = dense_features.shape[2:]
+    rpn_gt['bboxes'] = rpn_features[1]  # list(N boxes x 6)
+    rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
+    rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
+    rpn_gt['bscan_nocs_mask'] = rpn_features[4]  # list( 3 x X x Y x Z)
+    bscan_obj = rpn_features[5]
+    bscan_info = rpn_features[6]
 
     bbbox_lvl0, bgt_target, brpn_conf = outputs['rpn']['bbbox_lvl0'], outputs['rpn']['bgt_target'], outputs['rpn']['brpn_conf']
     bdscan_df = pd.DataFrame() 
     
     bdscan_gt_df = pd.DataFrame()
-    for B, dscan in enumerate(dscan_list):
+    for B in range(len(rpn_gt['bboxes'])):
 
-        for dobj in dscan.objects.values():
+        # Tracking infos
+        seq_pattern = "val/(.*?)/coco_data"
+        scan_pattern = "rgb_(.*?).png"
+        seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
+        scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
+
+        for obj_idx in rpn_gt['bobj_idxs'][B]:
+
             dscan_gt_df = pd.DataFrame()
-            dscan_gt_df['seq_name'] = [dscan.seq_name]
-            dscan_gt_df['scan_idx'] = [dscan.scan_idx]
-            dscan_gt_df['obj_idx'] = [dobj.obj_idx]
-            dscan_gt_df['model_id'] = [dobj.model_id]
-            dscan_gt_df['class_id'] = [dobj.class_id]
-            dscan_gt_df['class_name'] = [dobj.class_name]
-            dscan_gt_df['rot_sym'] = [dobj.rot_sym]
-            dscan_gt_df['scan_coverage'] = [dobj.scan_coverage]
+            dscan_gt_df['seq_name'] = [seq_name]
+            dscan_gt_df['scan_idx'] = [scan_idx]
+            dscan_gt_df['obj_idx'] = [obj_idx]
+            #dscan_gt_df['model_id'] = [dobj.model_id]
+            dscan_gt_df['class_id'] = [bscan_obj[B][str(obj_idx)]['category_id']]
+            dscan_gt_df['class_name'] = [bscan_obj[B][str(obj_idx)]['class_name']]
+            dscan_gt_df['rot_sym'] = [bscan_obj[B][str(obj_idx)]['rot_sym']]
+            dscan_gt_df['scan_coverage'] = [bscan_obj[B][str(obj_idx)]['num_occ']]
 
             bdscan_gt_df = pd.concat([bdscan_gt_df, dscan_gt_df], axis=0)
         
@@ -77,134 +77,119 @@ def evaluate_bdscan(outputs, bdscan: BDScan, losses=None, analyses=None):
 
     for B in range(len(bbbox_lvl0)):
         dscan_df = pd.DataFrame() 
-        dscan : DScan = dscan_list[B]
+        scan_objs = bscan_obj[B]
         bbox_lvl0, gt_target, rpn_conf = bbbox_lvl0[B], bgt_target[B], brpn_conf[B]
+
+        # Tracking infos
+        seq_pattern =  "val/(.*?)/coco_data"
+        scan_pattern = "rgb_(.*?).png"
+        seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
+        scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
 
         # object level evaluation
         for j, (pred_bbox, obj_idx) in enumerate(zip(bbox_lvl0, gt_target)):
-            dobject = dscan.objects[obj_idx]
+            dobject = scan_objs[str(obj_idx)]
             pred_df = pd.DataFrame()
             info_df = pd.DataFrame()
 
-            info_df['seq_name'] = [dscan.seq_name]
-            info_df['scan_idx'] = [dscan.scan_idx]
+            info_df['seq_name'] = [seq_name]
+            info_df['scan_idx'] = [scan_idx]
 
             info_df['prop_idx'] = [j]
             info_df['gt_target'] = [obj_idx]
 
             
-            info_df['model_id'] = [dobject.model_id]
-            info_df['class_name'] = [dobject.class_name]
-            info_df['scan_coverage_amodal'] = [dobject.scan_coverage_amodal]
+            #info_df['model_id'] = [dobject.model_id]
+            info_df['class_name'] = [dobject['class_name']]
+            #info_df['scan_coverage_amodal'] = [dobject.scan_coverage_amodal]
 
             pred_df = pd.concat([pred_df, info_df], axis=1, keys=['','info'])
 
             if 'rpn' in outputs:
                 rpn_df = pd.DataFrame()
                 # TODO MORE ADVANCED EVALUATION
-                gt_bbox = torch.from_numpy(dobject.bbox).cuda().int()
+                gt_bbox = torch.from_numpy(dobject['box_3d']).cuda().int()
 
                 rpn_df['iou'] = [iou3d(pred_bbox.unsqueeze(0).float(), gt_bbox.unsqueeze(0).float()).item()]
                 rpn_df['conf'] = [rpn_conf[j].item()]
 
+                '''
                 if 'rpn' in losses:
                     for loss_key, loss_vals in losses['rpn'].items():
                         if loss_key != 'total_loss':
                             rpn_df[loss_key] = [loss_vals[B].item()]
+                '''
                 
                 rpn_df.columns = pd.MultiIndex.from_product([['rpn'], rpn_df.columns])
                 pred_df = pd.concat([pred_df, rpn_df], axis=1)
             
-            if 'completion' in losses:
-                compl_df = pd.DataFrame()
+            # Completion
+            compl_df = pd.DataFrame()
 
-                gt_scan_inst_mask_crop = vg_crop(dscan.scan_inst_mask, pred_bbox, crop_box=True )
-                gt_scan_compl_crop = (gt_scan_inst_mask_crop == int(obj_idx))
-                pred_compl_crop = outputs['completion'][B][j]
+            gt_scan_inst_mask_crop = vg_crop(rpn_gt['bscan_inst_mask'][B], pred_bbox, crop_box=True )
+            gt_scan_compl_crop = (gt_scan_inst_mask_crop == int(obj_idx))
+            pred_compl_crop = outputs['completion'][B][j]
 
-                gt_unseen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) > 0.4) & gt_scan_compl_crop
-                pred_unseen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) > 0.4) & pred_compl_crop
+            gt_unseen_compl_crop = (torch.abs(vg_crop(rpn_gt['bscan_inst_mask'][B], pred_bbox, crop_box=True )) > 0) & gt_scan_compl_crop
+            pred_unseen_compl_crop = (torch.abs(vg_crop(rpn_gt['bscan_inst_mask'][B], pred_bbox, crop_box=True )) > 0) & pred_compl_crop
 
-                gt_seen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) <= 0.4) & gt_scan_compl_crop
-                pred_seen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) <= 0.4) & pred_compl_crop
+            #gt_seen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) <= 0.4) & gt_scan_compl_crop
+            #pred_seen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) <= 0.4) & pred_compl_crop
 
-                compl_df['iou'] = [mask_iou(pred_compl_crop, gt_scan_compl_crop, 1)]
-                compl_df['unseen_iou'] = [mask_iou(pred_unseen_compl_crop, gt_unseen_compl_crop, 1)]
-                compl_df['seen_iou'] = [mask_iou(pred_seen_compl_crop, gt_seen_compl_crop, 1)]
+            compl_df['iou'] = [mask_iou(pred_compl_crop, gt_scan_compl_crop, 1)]
+            compl_df['unseen_iou'] = [mask_iou(pred_unseen_compl_crop, gt_unseen_compl_crop, 1)]
+            #compl_df['seen_iou'] = [mask_iou(pred_seen_compl_crop, gt_seen_compl_crop, 1)]
 
-                for loss_key, loss_vals in losses['completion'].items():
-                    # TODO UGLY HACK!!!!
-                    compl_df[loss_key] = [loss_vals[B][j % len(loss_vals[B])].item()]
+            #for loss_key, loss_vals in losses['completion'].items():
+            #    compl_df[loss_key] = [loss_vals[B][j % len(loss_vals[B])].item()]
 
-                compl_df.columns = pd.MultiIndex.from_product([['completion'], compl_df.columns])
-                pred_df = pd.concat([pred_df, compl_df], axis=1)
+            compl_df.columns = pd.MultiIndex.from_product([['completion'], compl_df.columns])
+            pred_df = pd.concat([pred_df, compl_df], axis=1)
 
 
-            if 'noc' in losses:
-                noc_df = pd.DataFrame()
+            # Nocs
+            noc_df = pd.DataFrame()
 
-                gt_scan_noc_crop = vg_crop(dscan.scan_noc, pred_bbox)
-                gt_scan_inst_mask_crop = vg_crop(dscan.scan_inst_mask, pred_bbox)
-                gt_scan_noc_inst_crop = ((gt_scan_inst_mask_crop == int(obj_idx)) & torch.all(gt_scan_noc_crop >= 0, 1))[0][0]
+            gt_scan_noc_crop = torch.unsqueeze(vg_crop(rpn_gt['bscan_nocs_mask'][B], pred_bbox), dim=0)
+            gt_scan_inst_mask_crop = vg_crop(rpn_gt['bscan_inst_mask'][B], pred_bbox)
+            gt_scan_noc_inst_crop = ((gt_scan_inst_mask_crop == int(obj_idx)) & torch.all(gt_scan_noc_crop >= 0, 1))[0]#[0]
 
-                gt_noc_on_gt_inst = gt_scan_noc_crop[0,:, gt_scan_noc_inst_crop].T
+            gt_noc_on_gt_inst = gt_scan_noc_crop[0,:, gt_scan_noc_inst_crop].T
 
-                if type(outputs['noc']) == dict:
-                    pred_noc_crop = outputs['noc']['noc_values'][B][j]
-                else:
-                    pred_noc_crop = outputs['noc'][B][j]
-                pred_noc_on_gt_inst = pred_noc_crop[0,:, gt_scan_noc_inst_crop].T
+            if type(outputs['noc']) == dict:
+                pred_noc_crop = outputs['noc']['noc_values'][B][j]
+            else:
+                pred_noc_crop = outputs['noc'][B][j]
+            pred_noc_on_gt_inst = pred_noc_crop[0,:, gt_scan_noc_inst_crop].T
 
-                noc_df['acc5'] = [l1_acc(pred_noc_on_gt_inst, gt_noc_on_gt_inst, 0.05)]
-                noc_df['acc10'] = [l1_acc(pred_noc_on_gt_inst, gt_noc_on_gt_inst, 0.10)]
-                noc_df['acc15'] = [l1_acc(pred_noc_on_gt_inst, gt_noc_on_gt_inst, 0.15)]
+            noc_df['acc5'] = [l1_acc(pred_noc_on_gt_inst, gt_noc_on_gt_inst, 0.05)]
+            noc_df['acc10'] = [l1_acc(pred_noc_on_gt_inst, gt_noc_on_gt_inst, 0.10)]
+            noc_df['acc15'] = [l1_acc(pred_noc_on_gt_inst, gt_noc_on_gt_inst, 0.15)]
 
-                for loss_key, loss_vals in losses['noc'].items():
-                    noc_df[loss_key] = [loss_vals[B][j].item()]
+            #for loss_key, loss_vals in losses['noc'].items():
+            #    noc_df[loss_key] = [loss_vals[B][j].item()]
 
-                if 'noc' in analyses:
-                    for analysis_key, analysis_vals in analyses['noc'].items():
-                        if 'rot_angle_diffs' == analysis_key: 
-                            for k,d in enumerate(['x','y','z']):
-                                noc_df[analysis_key+'_%s'%d] = [analysis_vals[B][j][k].item()]
-                        if 'transl_diffs' == analysis_key: 
-                            for k,d in enumerate(['x','y','z']):
-                                noc_df[analysis_key + '_%s' % d] = [analysis_vals[B][j][k].item()]
-                        
-                        if 'transl_diffs_center' == analysis_key: 
-                            for k,d in enumerate(['x','y','z']):
-                                noc_df[analysis_key + '_%s' % d] = [analysis_vals[B][j][k].item()]
-                        if 'scale_diffs' == analysis_key: 
-                            noc_df[analysis_key] = [analysis_vals[B][j].item()]
-                                
-                noc_df.columns = pd.MultiIndex.from_product([['noc'], noc_df.columns])
-                pred_df = pd.concat([pred_df, noc_df], axis=1)
+
+            if analyses is not None and 'noc' in analyses:
+                for analysis_key, analysis_vals in analyses['noc'].items():
+                    if 'rot_angle_diffs' == analysis_key:
+                        for k,d in enumerate(['x','y','z']):
+                            noc_df[analysis_key+'_%s'%d] = [analysis_vals[B][j][k].item()]
+                    if 'transl_diffs' == analysis_key:
+                        for k,d in enumerate(['x','y','z']):
+                            noc_df[analysis_key + '_%s' % d] = [analysis_vals[B][j][k].item()]
+
+                    if 'transl_diffs_center' == analysis_key:
+                        for k,d in enumerate(['x','y','z']):
+                            noc_df[analysis_key + '_%s' % d] = [analysis_vals[B][j][k].item()]
+                    if 'scale_diffs' == analysis_key:
+                        noc_df[analysis_key] = [analysis_vals[B][j].item()]
+
+            noc_df.columns = pd.MultiIndex.from_product([['noc'], noc_df.columns])
+            pred_df = pd.concat([pred_df, noc_df], axis=1)
 
             dscan_df = pd.concat([dscan_df, pred_df], axis=0, ignore_index=True)
-        
-        # scan level evaluation
-        num_predictions = len(bbox_lvl0)
-        if 'scan_completion' in outputs:
-            scan_completion_df = pd.DataFrame()
-            gt_scan_compl = torch.abs(dscan.scan_sdf) < 2
-            pred_scan_compl = outputs['scan_completion'][B]
 
-            gt_unseen_scan_compl = (torch.abs(dscan.tsdf_geo)> 0.4) & gt_scan_compl
-            pred_unseen_scan_compl = (torch.abs(dscan.tsdf_geo)> 0.4) & pred_scan_compl
-
-            gt_seen_scan_compl = (torch.abs(dscan.tsdf_geo)<= 0.4) & gt_scan_compl
-            pred_seen_scan_compl = (torch.abs(dscan.tsdf_geo)<= 0.4) & pred_scan_compl
-            
-            #repeat for each prediction
-            scan_completion_df['iou'] = num_predictions * [mask_iou(pred_scan_compl, gt_scan_compl, 1)]
-            scan_completion_df['unseen_iou'] = num_predictions * [mask_iou(pred_unseen_scan_compl, gt_unseen_scan_compl, 1)]
-            scan_completion_df['seen_iou'] = num_predictions * [mask_iou(pred_seen_scan_compl, gt_seen_scan_compl, 1)]
-            
-            for loss_key, loss_val in losses['scan_completion'].items():
-                scan_completion_df[loss_key] = num_predictions * [loss_val[B].item()]
-
-            scan_completion_df.columns = pd.MultiIndex.from_product([['scan_completion'], scan_completion_df.columns])
-            dscan_df = pd.concat([dscan_df, scan_completion_df], axis=1)
 
         bdscan_df = pd.concat([bdscan_df, dscan_df], axis=0, ignore_index=True)       
     # pair-wise results
@@ -282,7 +267,7 @@ def evaluate_bdscan(outputs, bdscan: BDScan, losses=None, analyses=None):
 
     return bdscan_df, bdscan_gt_df
 
-def evaluate_dscan(outputs, dscan: DScan, losses=None, analyses=None):
+def evaluate_dscan(outputs, dscan, losses=None, analyses=None):
     dscan_df = pd.DataFrame() # columns=['seq_name', 'scan_idx', 'obj_idx', 'model_id', 'class_name']
     # dscan_df.append({'seq_name': 2, 'scan_idx': 30, "model_id": 'ff', 'momo': 30}, ignore_index=True)
     bbox_lvl0, gt_target = outputs['rpn']['bbox_lvl0'], outputs['rpn']['gt_target']

@@ -24,7 +24,7 @@ class Front_dataset(Dataset):
         self.split = split
         self.data_dir = os.path.join(base_dir, self.split)
         self.scenes = [f for f in os.listdir(os.path.abspath(self.data_dir))]
-        self.overfit = False
+        self.overfit = True
 
         self.imgs = []
         for scene in self.scenes:
@@ -47,6 +47,7 @@ class Front_dataset(Dataset):
         self.padded_size = [192, 192, 96] # x y z
         self.quantization_size = 0.03
         self.debugging_mode = False
+        self.cls_names = {1:'chair', 2:'table', 3:'sofa', 4:'bed'}
 
     def __len__(self):
         return len(self.imgs)
@@ -116,6 +117,7 @@ class Front_dataset(Dataset):
                             rot_sym = 'c2'
                         else:
                             rot_sym = 'None'
+                        cls_name = self.cls_names[cat_id]
 
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
@@ -140,7 +142,7 @@ class Front_dataset(Dataset):
 
                         # Binvox to world, then discretize and scale, finally place in the scene
                         bin_vox = get_voxel(voxel_path, scale)
-                        completed_obj_coords = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size)
+                        completed_obj_coords = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size, max_extensions=max_ext)
                         record['obj_scan_mask'][completed_obj_coords[0], completed_obj_coords[1],
                         completed_obj_coords[2]] = 1
 
@@ -170,6 +172,7 @@ class Front_dataset(Dataset):
 
                         obj = {
                             'category_id': cat_id,
+                            'class_name': cls_name,
                             'instance_id': instance_id,
                             'box_3d': box_3d,
                             'scale': scale,
