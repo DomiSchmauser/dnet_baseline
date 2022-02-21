@@ -121,7 +121,7 @@ class Front_dataset(Dataset):
 
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
-                        voxel_path = os.path.join(CONF.PATH.FUTURE3D, jid, 'model_128.binvox')
+                        voxel_path = os.path.join(CONF.PATH.BASE, 'binvox', jid, 'model_64.binvox')
                         #print(voxel_path)
 
                         # Cad2World transformation in Blender Space

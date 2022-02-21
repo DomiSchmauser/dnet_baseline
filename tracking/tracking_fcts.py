@@ -100,7 +100,7 @@ def pred_trajectory(trajectories, dscan_j, cam_grid2cam_free, obj0, traj_crit='w
                     if obj_j.sdf is not None:
                         # is gt
                         obj_j.occ = obj_j.sdf < 2
-                        obj_j_occ_in_noc = dot(np.linalg.inv(obj_j.noc2bbox_amodal), np.argwhere(obj_j.occ))
+                        obj_j_occ_in_noc = dot(np.linalg.inv(obj_j.noc2bbox_amodal), np.argwhere(obj_j.occ)) # bbox to nocs
                     else:
                         if match_criterion == 'iou0_segm':
                             surf_occ = (vg_crop((np.abs(dscan_j.tsdf_geo)<0.4), obj_j.bbox)  & (obj_j.occ > 0))
@@ -109,7 +109,7 @@ def pred_trajectory(trajectories, dscan_j, cam_grid2cam_free, obj0, traj_crit='w
                             obj_j_occ_in_noc = obj_j.noc[:, obj_j.occ > 0].T
                     obj_j.occ_in_noc = obj_j_occ_in_noc
 
-                obj_j_noc_vg =  voxelize_unit_pc(obj_j.occ_in_noc)
+                obj_j_noc_vg =  voxelize_unit_pc(obj_j.occ_in_noc) # voxelized pc
                 best_traj_idx, best_iou = -1, 0
                 for traj_idx, traj in enumerate(trajectories):
                     start_obj = traj[0]['obj']
@@ -164,30 +164,33 @@ def analyse_trajectories(seq_name, match_criterion ):
         pred_dseq = DSeq.load_from_file(seq_name, 'pred_%s'%seq_name.name, [scan_idx]) #,['tsdf_geo', 'tsdf_col'] if with_vis else [])
         pred_dscan_i = list(pred_dseq.scans.values())[0]
 
-        cam_free2world_free = np.array(gt_dscan_i.camera_pose) @ reflection_matrix([0, 0, 0], [0, 0, 1])
-        cam_grid2cam_free = np.linalg.inv(cam_free2world_free) @ gt_dscan_i.scan2world
+        cam_free2world_free = np.array(gt_dscan_i.camera_pose) @ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
+        cam_grid2cam_free = np.linalg.inv(cam_free2world_free) @ gt_dscan_i.scan2world # maybe discretized to free
 
         gt_target= get_moving_obj(gt_dscan_i)
         seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free,
         'cam_grid2cam_free': cam_grid2cam_free,
         'gt_target': gt_target}
         pred_dscan_i.tsdf_geo = gt_dscan_i.tsdf_geo
+
+        # Initialize trajectory
         if i == 0:
             for obj in pred_dscan_i.objects.values():
                 has_similar = False
-                for pred_traj in pred_trajectories:
-                    if np.linalg.norm(pred_traj[0]['obj'].aligned2scan[:3, 3] - obj.aligned2scan[:3, 3]) < 0.6 / 0.03:
+                for pred_traj in pred_trajectories: # Cad to scan
+                    if np.linalg.norm(pred_traj[0]['obj'].aligned2scan[:3, 3] - obj.aligned2scan[:3, 3]) < 0.6 / 0.03: # 0.6m / 0.03 = quantization size?
                         has_similar = True
-                if not has_similar:
-                    pred_trajectories.append([{'obj':obj, 'scan_idx':pred_dscan_i.scan_idx}])
+                if not has_similar: # ???
+                    pred_trajectories.append([{'obj':obj, 'scan_idx':pred_dscan_i.scan_idx}]) # Initial objects which dont match with GT objects start trajectory ??
             for obj in gt_dscan_i.objects.values():
-                gt_trajectories.append([{'obj': obj, 'scan_idx': gt_dscan_i.scan_idx} ])
+                gt_trajectories.append([{'obj': obj, 'scan_idx': gt_dscan_i.scan_idx}]) # All initial objects
         else:
+            # Match trajectories to initial trajectory
             pred_trajectories = pred_trajectory(pred_trajectories, pred_dscan_i, cam_grid2cam_free, None, traj_crit='with_first', match_criterion=match_criterion)
             for gt_traj in gt_trajectories:
                 for gt_obj in gt_dscan_i.objects.values():
                     if gt_traj[0]['obj'].obj_idx == gt_obj.obj_idx:
-                        gt_traj.append({'obj': gt_obj, 'scan_idx': gt_dscan_i.scan_idx})
+                        gt_traj.append({'obj': gt_obj, 'scan_idx': gt_dscan_i.scan_idx}) # build list per trajectory
                         break
             
     return pred_trajectories, gt_trajectories, seq_data

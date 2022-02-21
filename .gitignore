@@ -2,9 +2,14 @@
 output
 pretrained
 storage
+binvox 
 
 # Junk
 .idea
 *__pycache__
+
+# CFG
+baseconfig.py
+
 
 layer_utils
