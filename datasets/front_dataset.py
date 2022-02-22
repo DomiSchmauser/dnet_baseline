@@ -99,7 +99,7 @@ class Front_dataset(Dataset):
                 record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=self.quantization_size)
                 record['sparse_coords'], record['sparse_feats'] = clip_coords_feats(record['sparse_coords'], record['sparse_feats'])
 
-                # Coords outside window size 
+                # Coords outside window size
                 if record['sparse_coords'].shape[0] < 10:
                     print('Invalid image :', seq_path, img_num)
                     return None
@@ -155,6 +155,12 @@ class Front_dataset(Dataset):
                         box_3d[3] = np.clip(box_3d[3], 0, 191)
                         box_3d[4] = np.clip(box_3d[4], 0, 191)
                         box_3d[5] = np.clip(box_3d[5], 0, 95)
+
+                        # Skipping empty boxes
+                        if (box_3d[3] - box_3d[0]) <= 0 or (box_3d[4] - box_3d[1]) <= 0 or (box_3d[5] - box_3d[2]) <= 0:
+                            print('Bounding box empty skipping instance...')
+                            print(seq_path)
+                            continue
 
                         if self.debugging_mode:
                             dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
