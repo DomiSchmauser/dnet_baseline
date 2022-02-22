@@ -26,6 +26,10 @@ def batch_collate(batch):
 
     for idx, img in enumerate(batch):
 
+        # Empty object proposals in image due to outside boxes
+        if img is None:
+            continue
+
         # Scan level Level
         img_grid = torch.unsqueeze(img['dense_grid'], dim=0)
         occ.append(img_grid)
@@ -69,7 +73,7 @@ def batch_collate(batch):
             obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
             obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
             obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4).to(device)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.03)
+            obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.04)
             obj_feats[str(obj_idx)]['aligned2scan'][:3, :3] = torch.from_numpy(obj['rot'])
             obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
@@ -97,6 +101,7 @@ def batch_collate(batch):
     s_feats = []
     s_cpu_coords = []
     for s_idx, s_coord in enumerate(s_coords):
+
         s_reg_feats = sparse_reg_features[s_idx, :, s_coord[:, 0].long(), s_coord[:, 1].long(), s_coord[:, 2].long()]
         s_feats.append(torch.transpose(s_reg_feats, 0, 1))
         s_cpu_coords.append(s_coord.detach().cpu())

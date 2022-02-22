@@ -117,11 +117,14 @@ def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 192, 96], deb
     '''
 
     max_extensions = torch.max(coords, dim=0).values + 1
+    max_extensions[0] = torch.clamp(max_extensions[0], 0, 192)
+    max_extensions[1] = torch.clamp(max_extensions[1], 0, 192)
+    max_extensions[2] = torch.clamp(max_extensions[2], 0, 96)
     occupancy_grid = torch.zeros(max_extensions.tolist())
     occ_idxs = coords.type(torch.LongTensor)
-    x = occ_idxs[:,0]
-    y = occ_idxs[:,1]
-    z = occ_idxs[:,2]
+    x = torch.clamp(occ_idxs[:,0], 0, 191)
+    y = torch.clamp(occ_idxs[:,1], 0, 191)
+    z = torch.clamp(occ_idxs[:,2], 0, 95)
     occupancy_grid[x, y, z] = 1
 
     if debug_mode:
@@ -178,6 +181,32 @@ def boxpt2voxel(box_pts, quantization_size):
     xyz_max_vox = np.ceil(xyz_max * scaling)
 
     return np.concatenate((xyz_min_vox, xyz_max_vox))
+
+def clip_coords_feats(coords, feats, x_max=191, y_max=191, z_max=95):
+
+    '''
+    After quantization drop scene coords which are outside of max scene extension
+    '''
+
+    c_x = coords[:,0]
+    c_y = coords[:,1]
+    c_z = coords[:,2]
+
+    valid_x = torch.where(c_x <= x_max, True, False)
+    valid_y = torch.where(c_y <= y_max, True, False)
+    valid_z = torch.where(c_z <= z_max, True, False)
+    valid_mask = valid_x * valid_y * valid_z
+
+    valid_coords = coords[valid_mask,:]
+    valid_feats = feats[valid_mask,:]
+
+    #if valid_coords.shape[0] != coords.shape[0]:
+    #    test = 0
+
+    return valid_coords, valid_feats
+
+
+
 
 
 '''

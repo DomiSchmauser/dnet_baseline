@@ -52,6 +52,7 @@ class Trainer:
         self.models = {}
         self.parameters_rpn = []
         self.parameters_general = []
+        self.no_crash_mode = self.opt.no_crash_mode
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -196,7 +197,15 @@ class Trainer:
         for batch_idx, inputs in enumerate(self.val_loader):
 
             with torch.no_grad():
-                outputs, losses, analyses, _ = self.validation_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
+                if self.no_crash_mode:
+                    try:
+                        outputs, losses, analyses, _ = self.validation_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
+                    except:
+                        traceback.print_exc()
+                        continue
+                else:
+                    outputs, losses, analyses, _ = self.validation_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
+
                 overall_losses.append(losses)
 
                 if sparse_pretrain and not dense_pretrain:
@@ -264,7 +273,15 @@ class Trainer:
         location_diff = []
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
-            _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
+            if self.no_crash_mode:
+                try:
+                    _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain,
+                                                           dense_pretrain=dense_pretrain)
+                except:
+                    traceback.print_exc()
+                    continue
+            else:
+                _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 
             if sparse_pretrain and not dense_pretrain:
                 rpn_loss = losses['rpn']['total_loss']

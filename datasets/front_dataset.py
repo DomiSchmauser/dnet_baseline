@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 sys.path.append('..') #Hack add ROOT DIR
 from baseconfig import CONF
 
-from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel, boxpt2voxel
+from utils.data_utils import read_csv_mapping, load_hdf5, load_rgb, add_halfheight, coords2occupancy, get_voxel, boxpt2voxel, clip_coords_feats
 from utils.pose_utils import backproject_rgb, cam2world, occ2world, occ2noc, get_noc2scan
 from utils.net_utils import vg_crop
 from dvis import dvis
@@ -24,7 +24,7 @@ class Front_dataset(Dataset):
         self.split = split
         self.data_dir = os.path.join(base_dir, self.split)
         self.scenes = [f for f in os.listdir(os.path.abspath(self.data_dir))]
-        self.overfit = True
+        self.overfit = False
 
         self.imgs = []
         for scene in self.scenes:
@@ -45,9 +45,10 @@ class Front_dataset(Dataset):
         # Quantization and sparsify
         self.shift_pc = True
         self.padded_size = [192, 192, 96] # x y z
-        self.quantization_size = 0.03
+        self.quantization_size = 0.04
         self.debugging_mode = False
         self.cls_names = {1:'chair', 2:'table', 3:'sofa', 4:'bed'}
+        self.invalid_seq = ['80ed90e4-0110-4bf5-86ff-6c8fab0fdc90', '73492dd7-2106-4505-9348-4a52ebdfaf66_01']
 
     def __len__(self):
         return len(self.imgs)
@@ -96,6 +97,12 @@ class Front_dataset(Dataset):
 
                 # Sparse Input
                 record['sparse_coords'], record['sparse_feats'] = ME.utils.sparse_quantize(record['pc_rgb'][:,:3], features=record['pc_rgb'][:,3:], quantization_size=self.quantization_size)
+                record['sparse_coords'], record['sparse_feats'] = clip_coords_feats(record['sparse_coords'], record['sparse_feats'])
+
+                # Coords outside window size 
+                if record['sparse_coords'].shape[0] < 10:
+                    print('Invalid image :', seq_path, img_num)
+                    return None
 
                 # Dense Input
                 record['dense_grid'], max_ext = coords2occupancy(record['sparse_coords'], padded_size=self.padded_size, as_padded_whl=True)
@@ -137,12 +144,26 @@ class Front_dataset(Dataset):
                             loc_3d -= record['pc_offset']
 
                         box_3d = boxpt2voxel(box_3d, self.quantization_size)
+
+                        # Skip objects outside of scene
+                        if box_3d[0] > 191 or box_3d[1] > 191 or box_3d[2] > 95:
+                            print('Bounding box outside of the scene skipping instance...')
+                            print(seq_path)
+                            continue
+
+                        # Clip boxes to scan size
+                        box_3d[3] = np.clip(box_3d[3], 0, 191)
+                        box_3d[4] = np.clip(box_3d[4], 0, 191)
+                        box_3d[5] = np.clip(box_3d[5], 0, 95)
+
                         if self.debugging_mode:
                             dvis(np.expand_dims(box_3d, axis=0), fmt='box', c=1)
 
                         # Binvox to world, then discretize and scale, finally place in the scene
                         bin_vox = get_voxel(voxel_path, scale)
+
                         completed_obj_coords = occ2world(bin_vox, rot_3d, loc_3d, box_3d, quantization_size=self.quantization_size, max_extensions=max_ext)
+
                         record['obj_scan_mask'][completed_obj_coords[0], completed_obj_coords[1],
                         completed_obj_coords[2]] = 1
 
@@ -163,7 +184,7 @@ class Front_dataset(Dataset):
                         int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
 
                         # Noc2Scan
-                        noc2scan, cad2noc = get_noc2scan(rot_3d, loc_3d, scale, bin_vox)
+                        noc2scan, cad2noc = get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=self.quantization_size)
                         rot_3d = np.array(mathutils.Euler(rot_3d).to_matrix())
 
                         if self.debugging_mode:
@@ -185,6 +206,11 @@ class Front_dataset(Dataset):
                         obj_anns.append(obj)
 
                 record['obj_anns'] = obj_anns
+
+                if len(obj_anns) == 0:
+                    print('Invalid image :', seq_path, img_num)
+                    return None
+
                 #dvis(record['obj_scan_mask'] > 0, fmt='voxels')
 
                 # Remove not used entries

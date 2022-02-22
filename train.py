@@ -2,7 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 from options import Options
 from trainer import Trainer
-import os, shutil,sys
+import os, shutil, sys, traceback
 import argparse
 
 # the directory that options.py resides in

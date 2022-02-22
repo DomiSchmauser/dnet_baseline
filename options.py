@@ -14,6 +14,12 @@ class Options:
         self.parser = argparse.ArgumentParser(
             description="Tracking options")
 
+        # GENERAL
+        self.parser.add_argument("--no_crash_mode",
+                                 type=bool,
+                                 help="training mode without crashes",
+                                 default=True)
+
         # PATHS
         self.parser.add_argument("--base_dir",
                                  type=str,
@@ -44,7 +50,7 @@ class Options:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=1)
+                                 default=4)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",

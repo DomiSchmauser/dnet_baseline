@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from sklearn.preprocessing import minmax_scale
 from dvis import dvis
 
-def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.03):
+def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.04):
     '''
     Calculates the noc2scan matrix
     Not in the discretized space
