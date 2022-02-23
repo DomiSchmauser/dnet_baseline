@@ -181,12 +181,8 @@ class BNocDec2(nn.Module):
                     bbox = bbox_lvl0
                 else:
                     bbox = bbox_lvl0[j]
-                try:
-                    dobject = bscan_obj[B][str(gt_target[j])]
-                except:
-                    print(bscan_obj[B])
-                    print(str(gt_target[j]))
-                    sys.exit()
+
+                dobject = bscan_obj[B][str(gt_target[j])]
 
                 inst_occ = scan_noc_inst_crops[j]
                 if inst_occ.sum() < 5:

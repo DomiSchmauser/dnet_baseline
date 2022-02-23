@@ -20,8 +20,7 @@ class SparseRPNNet4_Res1(nn.Module):
         )
         self.reg = nn.Sequential(
             BasicBlock(self.num_features, self.num_features, dimension=3),
-            ME.MinkowskiConvolution(self.num_features  , 8  , kernel_size=1, stride=1, dimension=3),
-            
+            ME.MinkowskiConvolution(self.num_features  , 8  , kernel_size=1, stride=1, dimension=3), # 8
         )
         
     def forward(self, x):

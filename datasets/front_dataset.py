@@ -19,12 +19,12 @@ from dvis import dvis
 
 class Front_dataset(Dataset):
 
-    def __init__(self, base_dir, split='train'):
+    def __init__(self, base_dir, split='train', overfit=False):
 
         self.split = split
         self.data_dir = os.path.join(base_dir, self.split)
         self.scenes = [f for f in os.listdir(os.path.abspath(self.data_dir))]
-        self.overfit = False
+        self.overfit = overfit
 
         self.imgs = []
         for scene in self.scenes:
@@ -60,6 +60,7 @@ class Front_dataset(Dataset):
         '''
 
         img = self.imgs[idx]
+
         seq_path = img[:img.find('coco_data')-1]
         img_num = int(img[img.find('rgb_')+4:].replace('.png',''))
 
@@ -157,7 +158,7 @@ class Front_dataset(Dataset):
                         box_3d[5] = np.clip(box_3d[5], 0, 95)
 
                         # Skipping empty boxes
-                        if (box_3d[3] - box_3d[0]) <= 0 or (box_3d[4] - box_3d[1]) <= 0 or (box_3d[5] - box_3d[2]) <= 0:
+                        if (box_3d[3] - box_3d[0]) <= 3 or (box_3d[4] - box_3d[1]) <= 3 or (box_3d[5] - box_3d[2]) <= 3:
                             print('Bounding box empty skipping instance...')
                             print(seq_path)
                             continue
@@ -178,6 +179,9 @@ class Front_dataset(Dataset):
 
                         # Use box 3d and occupancy values to index object scan mask
                         cropped_obj = vg_crop(record['obj_scan_mask'].numpy(), box_3d)
+                        if cropped_obj.sum() < 5:
+                            print('Empty object')
+                            continue
 
                         # Nocs coords mask
                         noc_obj = occ2noc(cropped_obj, box_3d, rot_3d)

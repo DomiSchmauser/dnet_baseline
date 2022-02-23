@@ -174,6 +174,7 @@ class BSparseRPN_pure(nn.Module):
 
             bbbox_loss.append(bbox_loss)
 
+            #print(bbox_loss.item(), objness_loss.item())
             weighted_loss = self.objness_weight * objness_loss + self.bbox_weight * bbox_loss
             bweighted_loss.append(weighted_loss)
 

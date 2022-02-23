@@ -8,7 +8,7 @@ def init_cfg():
         'general': {
             'overfit': False,
             'sparse_pretrain_epochs': 50,
-            'dense_pretrain_epochs': 40,
+            'dense_pretrain_epochs': 30,
         },
         'sparse_backbone': {
             'num_features': 30,

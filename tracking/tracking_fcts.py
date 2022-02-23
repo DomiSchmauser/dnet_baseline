@@ -121,7 +121,7 @@ def pred_trajectory(trajectories, dscan_j, cam_grid2cam_free, obj0, traj_crit='w
                             start_obj_j_occ_in_noc = dot(np.linalg.inv(start_obj.noc2bbox_amodal), np.argwhere(start_obj.occ))
                         else:
                             if match_criterion == 'iou0_segm':
-                                surf_occ = (vg_crop((np.abs(dscan_j.tsdf_geo)<0.4), start_obj.bbox)  & (start_obj.occ > 0))
+                                surf_occ = (vg_crop((np.abs(dscan_j.tsdf_geo)<0.4), start_obj.bbox)  & (start_obj.occ > 0)) # gt and predicted occupancies which overlap
                                 start_obj_j_occ_in_noc = start_obj.noc[:, surf_occ].T
                             else:
                                 start_obj_j_occ_in_noc = start_obj.noc[:, start_obj.occ > 0].T

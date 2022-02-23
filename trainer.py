@@ -18,6 +18,7 @@ from torch.nn import functional as F
 import MinkowskiEngine as ME
 import open3d as o3d
 from pathlib import Path
+import re
 
 from dvis import dvis
 
@@ -31,7 +32,7 @@ from model_cfg import init_cfg
 from utils.train_utils import sec_to_hm_str, loss_to_logging
 from utils.net_utils import vg_crop
 from utils.scan_merge import merge2seq
-from datasets.sequence_chunking import batch_collate
+from datasets.sequence_chunking import batch_collate, batch_collate_infer
 from evaluate import evaluate
 
 # Model import
@@ -41,6 +42,9 @@ from models.BPureSparseBackbone import BPureSparseBackboneCol
 from models.BSparseRPN_pure import BSparseRPN_pure
 from models.BNocDec2 import BNocDec2
 from models.BNocDec2_ume import BNocDec2_ume
+
+# Tracking import
+from tracking.tracking_front import Tracker
 
 class Trainer:
 
@@ -102,6 +106,8 @@ class Trainer:
 
         self.general_optimizer = optim.Adam(self.parameters_general, self.opt.learning_rate_general,
                                         weight_decay=self.opt.weight_decay)
+        # Tracking ---------------------------------------------------------------------------------------------------
+        self.Tracker = Tracker()
         # Dataset ----------------------------------------------------------------------------------------------------
         DATA_DIR = CONF.PATH.FRONTDATA
         self.dataset = datasets.Front_dataset
@@ -126,7 +132,7 @@ class Trainer:
             batch_size=self.opt.batch_size,
             shuffle=False,
             num_workers=self.opt.num_workers,
-            collate_fn=batch_collate,
+            collate_fn=batch_collate_infer,
             pin_memory=False,
             drop_last=False)
 
@@ -234,7 +240,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=True, merge_seq=False):
+    def inference(self, store_results=False, merge_seq=False, vis=False):
         """
         Run the entire inference pipeline and perform tracking afterwards
         """
@@ -246,14 +252,47 @@ class Trainer:
         collection_eval_df = pd.DataFrame()
         collection_gt_eval_df = pd.DataFrame()
 
+        gt_seqs = dict()
+        pred_seqs = dict()
+        occ_grids = dict()
+
         for batch_idx, inputs in enumerate(self.val_loader):
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
+
+                if vis:
+                    dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
+                    boxes = outputs['rpn']['bbbox_lvl0'][0]
+                    for box in boxes:
+                        dvis(torch.unsqueeze(box, dim=0), fmt='box', c=1)
 
                 eval_df, gt_eval_df = evaluate(outputs, inputs, None, None)
                 collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
                 collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
                                                                 ignore_index=True)
+
+                # Scan level GT occupancy grids
+                for B, grid in inputs[0]:
+                    seq_pattern = "val/(.*?)/coco_data"
+                    seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
+                    if seq_name not in occ_grids:
+                        grid = torch.squeeze(grid)
+                        occ_grids[seq_name] = grid
+
+        # Sort and rearrange df
+        collection_gt_eval_df.sort_values(by='seq_name')
+        collection_gt_eval_df.sort_values(by='scan_idx')
+        collection_eval_df.sort_values(by='seq_name')
+        collection_eval_df.sort_values(by='scan_idx')
+
+        sequences = collection_gt_eval_df['seq_name'].unique().tolist()
+        for seq in sequences:
+            gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
+            pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
+            pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
+
+
+
 
         if store_results:
             # store evaluations
@@ -332,7 +371,7 @@ class Trainer:
             self.step += 1
         #self.model_lr_scheduler.step()
         if not sparse_pretrain and not dense_pretrain:
-            print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*0.03)
+            print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*0.04)
         self.val(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 
     def training_step(self, inputs, sparse_pretrain=False, dense_pretrain=False):
@@ -514,7 +553,7 @@ class Trainer:
         noc_output = self.noc_infer.infer_step(x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0, binst_occ)
         outputs["noc"] = noc_output
 
-        return outputs, rpn_features[-1]
+        return outputs, rpn_features[6]
 
     def log(self, mode, losses):
         """Write an event to the tensorboard events file

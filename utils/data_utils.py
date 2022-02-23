@@ -120,6 +120,7 @@ def coords2occupancy(coords, as_padded_whl=True, padded_size=[192, 192, 96], deb
     max_extensions[0] = torch.clamp(max_extensions[0], 0, 192)
     max_extensions[1] = torch.clamp(max_extensions[1], 0, 192)
     max_extensions[2] = torch.clamp(max_extensions[2], 0, 96)
+
     occupancy_grid = torch.zeros(max_extensions.tolist())
     occ_idxs = coords.type(torch.LongTensor)
     x = torch.clamp(occ_idxs[:,0], 0, 191)
