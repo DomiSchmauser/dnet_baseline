@@ -4,8 +4,6 @@ from trimesh.transformations import translation_matrix, rotation_matrix, scale_a
 import motmetrics as mm
 import pandas as pd
 
-
-
 #### helper
 
 def get_moving_obj(gt_dscan_i):
@@ -28,8 +26,6 @@ def voxelize_unit_pc(pc, shape=20):
     vg = np.zeros([shape, shape, shape]).astype(bool)
     vg[tuple(indices.T)] = True
     return vg
-
-
 
 def vg_crop(vg, bboxes, spatial_end=True, crop_box=False):
     # vg: ... X W X L X H
@@ -137,7 +133,7 @@ def pred_trajectory(trajectories, dscan_j, cam_grid2cam_free, obj0, traj_crit='w
                     if int(dscan_j.scan_idx) - int(traj[-1]['scan_idx']) < 10:
                         # last hypo of this trajectory is tempory close
                         prev_obj = traj[-1]['obj']
-                        prev_prop_matrix[traj_idx, obj_idx] = np.linalg.norm( (cam_grid2cam_free @ prev_obj.aligned2scan)[:3,3]-  (cam_grid2cam_free @ obj_j.aligned2scan)[:3,3])
+                        prev_prop_matrix[traj_idx, obj_idx] = np.linalg.norm( (cam_grid2cam_free @ prev_obj.aligned2scan)[:3,3]-  (cam_grid2cam_free @ obj_j.aligned2scan)[:3,3]) # Scan2World @ Cad2scan = cad2world
 
 
     return trajectories
@@ -165,7 +161,7 @@ def analyse_trajectories(seq_name, match_criterion ):
         pred_dscan_i = list(pred_dseq.scans.values())[0]
 
         cam_free2world_free = np.array(gt_dscan_i.camera_pose) @ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
-        cam_grid2cam_free = np.linalg.inv(cam_free2world_free) @ gt_dscan_i.scan2world # maybe discretized to free
+        cam_grid2cam_free = np.linalg.inv(cam_free2world_free) @ gt_dscan_i.scan2world # maybe discretized to free        #World2Cam Scan2World = Scan2Cam
 
         gt_target= get_moving_obj(gt_dscan_i)
         seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free,

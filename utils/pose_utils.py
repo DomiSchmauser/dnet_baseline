@@ -17,7 +17,7 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.04):
     euler = mathutils.Euler(rot_3d)
     rot = np.array(euler.to_matrix())
 
-    # Cad2Scan
+    # Cad2Scan # Cad2World
     scale_quant = 1/quantization_size
     cad2scan = np.identity(4)
     cad2scan[:3, :3] = rot
@@ -36,7 +36,7 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.04):
 
     cad2noc = np.linalg.inv(noc2cad)
 
-    noc2scan = noc2cad @ cad2scan
+    noc2scan = cad2scan @ noc2cad # cad2scan @ noc2cad = noc2scan?? -> lower with now
 
     return noc2scan, cad2noc
 

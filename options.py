@@ -46,11 +46,11 @@ class Options:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=100)
+                                 default=60)
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=2)
+                                 default=4)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",

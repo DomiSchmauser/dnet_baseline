@@ -107,8 +107,10 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
             info_df['prop_idx'] = [j]
             info_df['gt_target'] = [obj_idx]
             info_df['pred_aligned2scan'] = [outputs['noc']['pred_aligned2scans'][B][j].numpy()]
+            info_df['occ'] = [torch.squeeze(outputs['completion'][B][j]).detach().cpu().numpy()]
+            info_df['noc'] = [torch.squeeze(outputs['noc']['noc_values'][B][j]).detach().cpu().numpy()]
+            info_df['bbox'] = [outputs['rpn']['bbbox_lvl0'][B][j].detach().cpu().numpy()]
 
-            
             #info_df['model_id'] = [dobject.model_id]
             info_df['class_name'] = [dobject['class_name']]
             #info_df['scan_coverage_amodal'] = [dobject.scan_coverage_amodal]
@@ -120,8 +122,8 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
                 # TODO MORE ADVANCED EVALUATION
                 gt_bbox = torch.from_numpy(dobject['box_3d']).cuda().int()
 
-                rpn_df['iou'] = [iou3d(pred_bbox.unsqueeze(0).float(), gt_bbox.unsqueeze(0).float()).item()]
-                rpn_df['conf'] = [rpn_conf[j].item()]
+                rpn_df['rpn_iou'] = [iou3d(pred_bbox.unsqueeze(0).float(), gt_bbox.unsqueeze(0).float()).item()]
+                rpn_df['rpn_conf'] = [rpn_conf[j].item()]
 
                 '''
                 if 'rpn' in losses:
@@ -146,7 +148,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
             #gt_seen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) <= 0.4) & gt_scan_compl_crop
             #pred_seen_compl_crop = (torch.abs(vg_crop(dscan.tsdf_geo, pred_bbox, crop_box=True )) <= 0.4) & pred_compl_crop
 
-            compl_df['iou'] = [mask_iou(pred_compl_crop, gt_scan_compl_crop, 1)]
+            compl_df['compl_iou'] = [mask_iou(pred_compl_crop, gt_scan_compl_crop, 1)]
             compl_df['unseen_iou'] = [mask_iou(pred_unseen_compl_crop, gt_unseen_compl_crop, 1)]
             #compl_df['seen_iou'] = [mask_iou(pred_seen_compl_crop, gt_seen_compl_crop, 1)]
 

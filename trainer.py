@@ -64,6 +64,7 @@ class Trainer:
         cfg = init_cfg()
         self.sparse_pretrain_ep = cfg['general']['sparse_pretrain_epochs']
         self.dense_pretrain_ep = cfg['general']['dense_pretrain_epochs']
+        self.overfit = cfg['general']['overfit']
 
         # Sparse Backbone & RPN
         self.models["sparse_backbone"] = networks.PureSparseBackboneCol_Res1(conf=cfg['sparse_backbone'])
@@ -112,7 +113,7 @@ class Trainer:
         DATA_DIR = CONF.PATH.FRONTDATA
         self.dataset = datasets.Front_dataset
 
-        train_dataset = self.dataset(base_dir=DATA_DIR, split='train')
+        train_dataset = self.dataset(base_dir=DATA_DIR, split='train', overfit=self.overfit)
 
         self.train_loader = DataLoader(
             train_dataset,
@@ -240,7 +241,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, merge_seq=False, vis=False):
+    def inference(self, store_results=False, vis=False):
         """
         Run the entire inference pipeline and perform tracking afterwards
         """
@@ -252,8 +253,6 @@ class Trainer:
         collection_eval_df = pd.DataFrame()
         collection_gt_eval_df = pd.DataFrame()
 
-        gt_seqs = dict()
-        pred_seqs = dict()
         occ_grids = dict()
 
         for batch_idx, inputs in enumerate(self.val_loader):
@@ -272,11 +271,11 @@ class Trainer:
                                                                 ignore_index=True)
 
                 # Scan level GT occupancy grids
-                for B, grid in inputs[0]:
+                for B, grid in enumerate(inputs[0]):
                     seq_pattern = "val/(.*?)/coco_data"
                     seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
                     if seq_name not in occ_grids:
-                        grid = torch.squeeze(grid)
+                        grid = torch.squeeze(grid).detach().cpu().numpy()
                         occ_grids[seq_name] = grid
 
         # Sort and rearrange df
@@ -290,9 +289,9 @@ class Trainer:
             gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
             pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
             pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
-
-
-
+            gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
+            pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
+            seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
 
         if store_results:
             # store evaluations
@@ -301,9 +300,6 @@ class Trainer:
 
             collection_eval_df.to_csv(Path(eval_dir, 'collection.csv'), index=False)
             collection_gt_eval_df.to_csv(Path(eval_dir, 'collection_gt.csv'), index=False)
-
-        if merge_seq:
-            merge2seq(self.experiment_dir, "inference")
 
     def run_epoch(self, sparse_pretrain=False, dense_pretrain=False):
         self.set_train()
