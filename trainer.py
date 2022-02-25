@@ -252,6 +252,7 @@ class Trainer:
 
         collection_eval_df = pd.DataFrame()
         collection_gt_eval_df = pd.DataFrame()
+        mota_df = pd.DataFrame()
 
         occ_grids = dict()
 
@@ -292,6 +293,7 @@ class Trainer:
             gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
             pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
             seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
+            mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
 
         if store_results:
             # store evaluations
@@ -357,7 +359,7 @@ class Trainer:
             # logging
             duration = time.time() - before_op_time
 
-            self.opt.log_frequency = 100
+            self.opt.log_frequency = 1
             if int(batch_idx + 1) % self.opt.log_frequency == 0:
                 self.log_time(batch_idx, duration, losses['total_loss'])
 

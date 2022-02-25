@@ -55,7 +55,7 @@ class Tracker:
                     gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # All initial objects
             else:
                 # Match trajectories to initial trajectory
-                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='with_first', match_criterion=self.match_criterion)
+                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='with_first', match_criterion=self.match_criterion, scan_idx=scan_idx)
                 for gt_traj in gt_trajectories:
                     for gt_obj in gt_scan_dct.values():
                         if gt_traj[0]['obj']['obj_idx'] == gt_obj['obj_idx']:
@@ -64,7 +64,7 @@ class Tracker:
 
         return pred_trajectories, gt_trajectories, seq_data
 
-    def pred_trajectory(self, trajectories, dscan_j, cam_grid2cam_free, obj0, occ_grid=None, traj_crit='with_first', match_criterion='iou0'):
+    def pred_trajectory(self, trajectories, dscan_j, cam_grid2cam_free, obj0, occ_grid=None, traj_crit='with_first', match_criterion='iou0', scan_idx=None):
 
         # assign proposals to trajectories based on traj_crit and match_criterion
         traj_prop_matrix = np.zeros((len(trajectories), len(dscan_j.values())))
@@ -76,7 +76,7 @@ class Tracker:
                     surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
                     obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
 
-                    obj_j['occ_in_noc'] = obj_j_occ_in_noc
+                    #obj_j['occ_in_noc'] = obj_j_occ_in_noc
                     obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
 
                     for traj_idx, traj in enumerate(trajectories):
@@ -87,7 +87,7 @@ class Tracker:
                                         start_obj['occ'] > 0))
                             start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
 
-                            start_obj['occ_in_noc'] = start_obj_j_occ_in_noc
+                            #start_obj['occ_in_noc'] = start_obj_j_occ_in_noc
 
                         start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
 
@@ -101,6 +101,13 @@ class Tracker:
                                 (cam_grid2cam_free @ prev_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j['pred_aligned2scan'])[:3, 3]) # compare cad to cam preds
 
             obj_idx += 1
+
+        # Use max IoU current object with start object to build trajectory
+        for traj_id, traj_ious in enumerate(traj_prop_matrix):
+            idx_miou = np.argmax(traj_ious)
+            obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx':scan_idx}
+            trajectories[traj_id].append(obj_dict)
+
         return trajectories
 
     def get_traj_table(self, traj, seq_data, traj_id):
@@ -125,7 +132,7 @@ class Tracker:
                                           world_x=world_t[0],
                                           world_y=world_t[1],
                                           world_z=world_t[2],
-                                          obj_idx=traj[k]['obj']['obj_idx'],
+                                          obj_idx=traj[k]['obj']['obj_idx'] if 'obj_idx' in traj[k]['obj'] else None,
                                           ref_obj_idx=traj[k]['ref_obj_idx'] if 'ref_obj_idx' in traj[k] else None,
                                           gt_obj_idx=[np.array(seq_data[scan_idx]['gt_target'])] if seq_data[scan_idx][
                                                                                                     'gt_target'] is not None else None, # ISSUE CAN HOLD ONLY ONE ID
@@ -144,7 +151,7 @@ class Tracker:
 
     def eval_mota(self, pred_table, mov_obj_traj_table):
         # compute mota based on l2_th
-        l2_th = 0.25
+        l2_th = 0.25# *1/0.04
 
         mh = mm.metrics.create()
         all_traj_summary = pd.DataFrame()
@@ -152,12 +159,13 @@ class Tracker:
         for pred_traj_id in pred_table['traj_id'].drop_duplicates():
             acc = mm.MOTAccumulator(auto_id=True)
             for scan_idx in mov_obj_traj_table['scan_idx']:
-                gt_cam = np.array(
+                gt_cams = np.array(
                     mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['cam_x', 'cam_y', 'cam_z']])
                 # get gt position in camera frame
-                gt_idx = int(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'])
+                gt_objects = mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'].tolist()
+                #gt_idx = int(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'])
 
-                gt_objects = [gt_idx]
+                #gt_objects = [gt_idx]
 
                 hypo_table = pred_table[(pred_table['scan_idx'] == scan_idx) & (pred_table['traj_id'] == pred_traj_id)]
                 pred_objects = []
@@ -169,6 +177,7 @@ class Tracker:
                     hypo_id = int(hypo[1]['traj_id'].split('_')[-1])  # format was pred_X
                     pred_objects.append(hypo_id)
                     for i, gt_obj in enumerate(gt_objects):
+                        gt_cam = gt_cams[i,:]
                         # SINGLE GT OBJECT THOUGH
                         dist_matrix[i][j] = mm.distances.norm2squared_matrix(gt_cam, hypo_cam, max_d2=l2_th)
                         # l2 distance between gt object and hypothesis, capped to l2_th
