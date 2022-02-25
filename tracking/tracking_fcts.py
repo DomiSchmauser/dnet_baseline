@@ -163,7 +163,7 @@ def analyse_trajectories(seq_name, match_criterion ):
         cam_free2world_free = np.array(gt_dscan_i.camera_pose) @ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
         cam_grid2cam_free = np.linalg.inv(cam_free2world_free) @ gt_dscan_i.scan2world # maybe discretized to free        #World2Cam Scan2World = Scan2Cam
 
-        gt_target= get_moving_obj(gt_dscan_i)
+        gt_target= get_moving_obj(gt_dscan_i) # All GT ids
         seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free,
         'cam_grid2cam_free': cam_grid2cam_free,
         'gt_target': gt_target}

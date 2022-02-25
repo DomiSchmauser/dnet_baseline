@@ -31,10 +31,13 @@ class Tracker:
             pred_scan_dct = pred_scan.to_dict(orient='index')
 
             cam_free2world_free = list(gt_scan_dct.values())[0]['campose'] @ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
-            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free
+            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free # Scan2cam
             cam_grid2cam_free[:3,3] *= 0.04 #transfrom from discretized to coords
 
-            gt_target = 0
+            gt_target = []
+            for gt_t in list(gt_scan_dct.values()):
+                gt_target.append(gt_t['obj_idx'])
+
             seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free,
                                   'cam_grid2cam_free': cam_grid2cam_free,
                                   'gt_target': gt_target}
@@ -95,7 +98,7 @@ class Tracker:
                             # last hypo of this trajectory is tempory close
                             prev_obj = traj[-1]['obj']
                             prev_prop_matrix[traj_idx, obj_idx] = np.linalg.norm(
-                                (cam_grid2cam_free @ prev_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j['pred_aligned2scan'])[:3, 3])
+                                (cam_grid2cam_free @ prev_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j['pred_aligned2scan'])[:3, 3]) # compare cad to cam preds
 
             obj_idx += 1
         return trajectories
@@ -124,8 +127,8 @@ class Tracker:
                                           world_z=world_t[2],
                                           obj_idx=traj[k]['obj']['obj_idx'],
                                           ref_obj_idx=traj[k]['ref_obj_idx'] if 'ref_obj_idx' in traj[k] else None,
-                                          gt_obj_idx=seq_data[scan_idx]['gt_target'] if seq_data[scan_idx][
-                                                                                                    'gt_target'] is not None else None,
+                                          gt_obj_idx=[np.array(seq_data[scan_idx]['gt_target'])] if seq_data[scan_idx][
+                                                                                                    'gt_target'] is not None else None, # ISSUE CAN HOLD ONLY ONE ID
                                           ), index=[scan_idx]
                                      )
 

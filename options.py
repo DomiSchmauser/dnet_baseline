@@ -34,7 +34,7 @@ class Options:
         self.parser.add_argument("--learning_rate_rpn",
                                  type=float,
                                  help="learning rate rpn",
-                                 default=5e-3)
+                                 default=1e-3)
         self.parser.add_argument("--learning_rate_general",
                                  type=float,
                                  help="learning rate general",
@@ -42,7 +42,7 @@ class Options:
         self.parser.add_argument("--weight_decay", # L2 Regularization
                                  type=float,
                                  help="weight decay",
-                                 default=0) # 1e-4
+                                 default=1e-4) # 1e-4
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",

@@ -25,17 +25,19 @@ class Front_dataset(Dataset):
         self.data_dir = os.path.join(base_dir, self.split)
         self.scenes = [f for f in os.listdir(os.path.abspath(self.data_dir))]
         self.overfit = overfit
+        self.invalid_seq = ['80ed90e4-0110-4bf5-86ff-6c8fab0fdc90', '73492dd7-2106-4505-9348-4a52ebdfaf66_01', '73492dd7-2106-4505-9348-4a52ebdfaf66']
 
         self.imgs = []
         for scene in self.scenes:
-            scene_path = os.path.join(self.data_dir, scene, "coco_data")
-            scene_imgs = [os.path.join(scene_path, img) for img in os.listdir(scene_path) if 'rgb' in img]
-            scene_imgs.sort()
+            if scene not in self.invalid_seq:
+                scene_path = os.path.join(self.data_dir, scene, "coco_data")
+                scene_imgs = [os.path.join(scene_path, img) for img in os.listdir(scene_path) if 'rgb' in img]
+                scene_imgs.sort()
 
-            if self.overfit:
-                self.imgs.append(scene_imgs[0])
-            else:
-                self.imgs += scene_imgs
+                if self.overfit:
+                    self.imgs.append(scene_imgs[0])
+                else:
+                    self.imgs += scene_imgs
 
         mapping_file_path = os.path.join(base_dir, "3D_front_mapping.csv")
         _, self.csv_dict = read_csv_mapping(mapping_file_path)
@@ -48,7 +50,6 @@ class Front_dataset(Dataset):
         self.quantization_size = 0.04
         self.debugging_mode = False
         self.cls_names = {1:'chair', 2:'table', 3:'sofa', 4:'bed'}
-        self.invalid_seq = ['80ed90e4-0110-4bf5-86ff-6c8fab0fdc90', '73492dd7-2106-4505-9348-4a52ebdfaf66_01']
 
     def __len__(self):
         return len(self.imgs)
@@ -129,7 +130,8 @@ class Front_dataset(Dataset):
 
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
-                        voxel_path = os.path.join(CONF.PATH.BASE, 'binvox', jid, 'model_64.binvox')
+                        #voxel_path = os.path.join(CONF.PATH.BASE, 'binvox', jid, 'model_64.binvox')
+                        voxel_path = os.path.join('/home/schmauser/bin_vox64', jid, 'model_64.binvox')
                         #print(voxel_path)
 
                         # Cad2World transformation in Blender Space
