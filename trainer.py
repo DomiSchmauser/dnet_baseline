@@ -357,7 +357,7 @@ class Trainer:
             # logging
             duration = time.time() - before_op_time
 
-            self.opt.log_frequency = 1
+            self.opt.log_frequency = 100
             if int(batch_idx + 1) % self.opt.log_frequency == 0:
                 self.log_time(batch_idx, duration, losses['total_loss'])
 
