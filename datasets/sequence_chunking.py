@@ -209,6 +209,9 @@ def batch_collate_infer(batch):
             obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4).to(device)
             obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.04)
             obj_feats[str(obj_idx)]['aligned2scan'][:3, :3] = torch.from_numpy(obj['rot'])
+            obj_feats[str(obj_idx)]['cad2world'] = torch.eye(4).to(device)
+            obj_feats[str(obj_idx)]['cad2world'][:3, 3] = torch.from_numpy(obj['loc'])
+            obj_feats[str(obj_idx)]['cad2world'][:3, :3] = torch.from_numpy(obj['rot'])
             obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
 

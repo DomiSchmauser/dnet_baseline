@@ -76,6 +76,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
             dscan_gt_df['class_name'] = [bscan_obj[B][str(obj_idx)]['class_name']]
             dscan_gt_df['rot_sym'] = [bscan_obj[B][str(obj_idx)]['rot_sym']]
             dscan_gt_df['aligned2scan'] = [bscan_obj[B][str(obj_idx)]['aligned2scan'].detach().cpu().numpy()]
+            #dscan_gt_df['cad2world'] = [bscan_obj[B][str(obj_idx)]['cad2world'].detach().cpu().numpy()]
             dscan_gt_df['scan_coverage'] = [bscan_obj[B][str(obj_idx)]['num_occ']]
             dscan_gt_df['campose'] = [campose]
 
