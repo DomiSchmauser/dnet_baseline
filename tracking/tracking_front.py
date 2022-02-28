@@ -13,7 +13,7 @@ class Tracker:
         self.match_criterion = 'iou0'
         self.quantization_size = 0.04
 
-    def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grid):
+    def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
         '''
         Create trajectories based on match criterion
         '''
@@ -24,6 +24,8 @@ class Tracker:
         gt_trajectories = []
 
         for scan_idx in range(self.seq_len):
+
+            occ_grid = occ_grids[scan_idx]
 
             gt_scan = gt_seq_df.loc[gt_seq_df['scan_idx'] == scan_idx]
             pred_scan = pred_seq_df.loc[pred_seq_df['scan_idx'] == scan_idx]
@@ -181,7 +183,7 @@ class Tracker:
 
         #for pred_traj_id in pred_table['traj_id'].drop_duplicates():
         acc = mm.MOTAccumulator(auto_id=True)
-        for scan_idx in mov_obj_traj_table['scan_idx']:
+        for scan_idx in range(self.seq_len):
             gt_cams = np.array(
                 mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['cam_x', 'cam_y', 'cam_z']]) # CAD2WORLD TRANSLATION
             # get gt position in camera frame

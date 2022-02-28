@@ -122,7 +122,7 @@ class Trainer:
             self.opt.batch_size,
             shuffle=True,
             num_workers=self.opt.num_workers,
-            collate_fn=batch_collate_cpu,
+            collate_fn=batch_collate,
             pin_memory=False, #Todo set to true for speedup
             drop_last=True)
 
@@ -236,7 +236,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False):
+    def inference(self, store_results=False, vis=False, mota_log_freq=1):
         """
         Run the entire inference pipeline and perform tracking afterwards
         """
@@ -255,7 +255,7 @@ class Trainer:
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
 
-                if vis:
+                if vis and '3deec4df-5cbc-436b-a264-f97c25dddc62_01' in inputs[2][6][0]:
                     dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
                     boxes = outputs['rpn']['bbbox_lvl0'][0]
                     for box in boxes:
@@ -269,10 +269,17 @@ class Trainer:
                 # Scan level GT occupancy grids
                 for B, grid in enumerate(inputs[0]):
                     seq_pattern = "val/(.*?)/coco_data"
+                    scan_pattern = "rgb_(.*?).png"
                     seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
+                    scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
+
                     if seq_name not in occ_grids:
+                        occ_grids[seq_name] = dict()
                         grid = torch.squeeze(grid).detach().cpu().numpy()
-                        occ_grids[seq_name] = grid
+                        occ_grids[seq_name][scan_idx] = grid
+                    else:
+                        grid = torch.squeeze(grid).detach().cpu().numpy()
+                        occ_grids[seq_name][scan_idx] = grid
 
         # Sort and rearrange df
         collection_gt_eval_df.sort_values(by='seq_name')
@@ -281,7 +288,7 @@ class Trainer:
         collection_eval_df.sort_values(by='scan_idx')
 
         sequences = collection_gt_eval_df['seq_name'].unique().tolist()
-        for seq in sequences:
+        for seq_idx, seq in enumerate(sequences):
             gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
             pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
             pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
@@ -290,7 +297,13 @@ class Trainer:
             seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
             mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
 
+            if int(seq_idx + 1) % mota_log_freq == 0:
+                mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
+                num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
+                num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
+                print('Current avg MOTA :', mota_score, ' Current sum Misses :', num_misses, ' Current sum False Positives :', num_false_positives)
 
+        print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
         num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
         num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
@@ -362,7 +375,7 @@ class Trainer:
             # logging
             duration = time.time() - before_op_time
 
-            self.opt.log_frequency = 1
+            self.opt.log_frequency = 5
             if int(batch_idx + 1) % self.opt.log_frequency == 0:
                 self.log_time(batch_idx, duration, losses['total_loss'])
 
