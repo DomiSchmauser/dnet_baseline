@@ -79,7 +79,7 @@ class BCompletionDec2(nn.Module):
         for B in range(len(bbbox_lvl0)):
 
             # Get occupancy values of completed map
-            scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbbox_lvl0[B]) # Unsqueeze for loop later
+            scan_inst_mask_crops = vg_crop(rpn_gt['bscan_inst_mask'][B], bbbox_lvl0[B])
 
             # Could also just insert 1 for values > than 0
             scan_compl_crops = [(scan_inst_mask_crop == int(bgt_target[B][i])).float() for i,scan_inst_mask_crop in enumerate(scan_inst_mask_crops)]

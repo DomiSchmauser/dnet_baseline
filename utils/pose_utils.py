@@ -89,7 +89,7 @@ def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03, 
 
     # Voxel space to CAD space
     nonzero_inds = np.nonzero(voxel_grid)[:-1]
-    max_value = voxel_grid.shape[0] - 1
+    #max_value = voxel_grid.shape[0] - 1
     points = nonzero_inds / 31 - 0.5
     points = points.numpy()
     points[:, 1] -= points[:, 1].min() # CAD space y is shifted up to start at 0
@@ -105,10 +105,9 @@ def occ2world(voxel_grid, euler_rot, translation, bbox, quantization_size=0.03, 
 
     grid = np.zeros((192, 192, 96))
 
-
-    x = coords[:, 0]
-    y = coords[:, 1]
-    z = coords[:, 2]
+    #x = coords[:, 0]
+    #y = coords[:, 1]
+    #z = coords[:, 2]
 
     x_min, x_max = bbox[0], bbox[3]
     y_min, y_max = bbox[1], bbox[4]

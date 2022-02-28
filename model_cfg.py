@@ -7,8 +7,9 @@ def init_cfg():
     model_cfg = {
         'general': {
             'overfit': False,
-            'sparse_pretrain_epochs': 10,
-            'dense_pretrain_epochs': 10,
+            'quantization_size': 0.04,
+            'sparse_pretrain_epochs': 3,
+            'dense_pretrain_epochs': 3,
         },
         'sparse_backbone': {
             'num_features': 30,

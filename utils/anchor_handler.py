@@ -103,8 +103,7 @@ class AnchorHandler():
 
         rpn_bbox = np.concatenate([(centers[anchor_iou_argmax] - anchor_centers) / anchor_sizes,
         np.log(sizes[anchor_iou_argmax] / anchor_sizes)], axis=1).astype(np.float32)
-        
-        # TODO More elaborate considering the actual overlapping
+
         gt_weights = scan_coverages[anchor_iou_argmax]
 
         gt_obj_inds = [obj_inds[i] for i in anchor_iou_argmax]

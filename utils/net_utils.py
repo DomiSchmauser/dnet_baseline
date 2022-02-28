@@ -350,7 +350,6 @@ def rotation_matrix_to_angle_axis(rotation_matrix):
         >>> input = torch.rand(2, 3, 3)  # Nx3x3
         >>> output = tgm.rotation_matrix_to_angle_axis(input)  # Nx3
     """
-    # todo add check that matrix is a valid rotation matrix
     quaternion = rotation_matrix_to_quaternion(rotation_matrix)
     return quaternion_to_angle_axis(quaternion)
 

@@ -32,8 +32,8 @@ class Tracker:
             pred_scan_dct = pred_scan.to_dict(orient='index')
 
             cam_free2world_free = list(gt_scan_dct.values())[0]['campose'] #@ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
-            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free # Scan2cam
-            cam_grid2cam_free[:3,3] *= self.quantization_size #transfrom from discretized to coords
+            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free
+            cam_grid2cam_free[:3,3] *= self.quantization_size # Scan2cam
 
             gt_target = []
             for gt_t in list(gt_scan_dct.values()):
@@ -118,10 +118,10 @@ class Tracker:
         for k in range(len(traj)):
             scan_idx = traj[k]['scan_idx']
             if 'gt' in traj_id:
-                aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['aligned2scan'] # CAD2CAM
+                #aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['aligned2scan'] # CAD2CAM
                 aligned2cam_free = traj[k]['obj']['aligned2scan'] # CAD2CAM
             else:
-                aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['pred_aligned2scan']
+                #aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['pred_aligned2scan']
                 aligned2cam_free =  traj[k]['obj']['pred_aligned2scan']
 
             aligned2world_free = seq_data[scan_idx]['cam_free2world_free'] @ aligned2cam_free # CAD2WORLD

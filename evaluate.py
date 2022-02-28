@@ -120,7 +120,6 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
 
             if 'rpn' in outputs:
                 rpn_df = pd.DataFrame()
-                # TODO MORE ADVANCED EVALUATION
                 gt_bbox = torch.from_numpy(dobject['box_3d']).cuda().int()
 
                 rpn_df['rpn_iou'] = [iou3d(pred_bbox.unsqueeze(0).float(), gt_bbox.unsqueeze(0).float()).item()]
@@ -203,15 +202,6 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
 
             dscan_df = pd.concat([dscan_df, pred_df], axis=0, ignore_index=True)
 
-
-        bdscan_df = pd.concat([bdscan_df, dscan_df], axis=0, ignore_index=True)       
-
+        bdscan_df = pd.concat([bdscan_df, dscan_df], axis=0, ignore_index=True)
 
     return bdscan_df, bdscan_gt_df
-
-
-
-
-
-
-            

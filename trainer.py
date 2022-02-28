@@ -32,7 +32,7 @@ from model_cfg import init_cfg
 from utils.train_utils import sec_to_hm_str, loss_to_logging
 from utils.net_utils import vg_crop
 from utils.scan_merge import merge2seq
-from datasets.sequence_chunking import batch_collate, batch_collate_infer
+from datasets.sequence_chunking import batch_collate, batch_collate_infer, batch_collate_cpu
 from evaluate import evaluate
 
 # Model import
@@ -57,6 +57,7 @@ class Trainer:
         self.parameters_rpn = []
         self.parameters_general = []
         self.no_crash_mode = self.opt.no_crash_mode
+        #self.no_crash_mode = False
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -65,6 +66,7 @@ class Trainer:
         self.sparse_pretrain_ep = cfg['general']['sparse_pretrain_epochs']
         self.dense_pretrain_ep = cfg['general']['dense_pretrain_epochs']
         self.overfit = cfg['general']['overfit']
+        self.quantization_size = cfg['general']['quantization_size']
 
         # Sparse Backbone & RPN
         self.models["sparse_backbone"] = networks.PureSparseBackboneCol_Res1(conf=cfg['sparse_backbone'])
@@ -120,8 +122,8 @@ class Trainer:
             self.opt.batch_size,
             shuffle=True,
             num_workers=self.opt.num_workers,
-            collate_fn=batch_collate,
-            pin_memory=False,
+            collate_fn=batch_collate_cpu,
+            pin_memory=False, #Todo set to true for speedup
             drop_last=True)
 
         val_dataset = self.dataset(
@@ -177,7 +179,6 @@ class Trainer:
 
         for self.epoch in range(self.opt.num_epochs):
 
-            print('Start training ...')
             if self.epoch < self.sparse_pretrain_ep:
                 sparse_pretrain = True
                 dense_pretrain = False
@@ -225,12 +226,6 @@ class Trainer:
                     rpn_loss = losses['rpn']['total_loss']
                     loss = losses['total_loss']
                     losses['total_loss'] = loss.item() + rpn_loss.item()
-            '''
-                eval_df, gt_eval_df = evaluate(outputs, inputs, losses, analyses)
-                collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
-                collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
-                                                                ignore_index=True)
-                '''
 
         log_losses = loss_to_logging(overall_losses)
         self.log("val", log_losses)
@@ -295,6 +290,12 @@ class Trainer:
             seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
             mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
 
+
+        mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
+        num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
+        num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
+        print('MOTA :', mota_score, ' Misses :', num_misses, ' False Positives :', num_false_positives)
+
         if store_results:
             # store evaluations
             eval_dir = Path(self.experiment_dir, 'evaluations', 'inference')
@@ -310,6 +311,8 @@ class Trainer:
         location_diff = []
         for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
+
+            # Training loop
             if self.no_crash_mode:
                 try:
                     _, losses, analyses, _ = self.training_step(inputs, sparse_pretrain=sparse_pretrain,
@@ -368,8 +371,10 @@ class Trainer:
 
             self.step += 1
         #self.model_lr_scheduler.step()
+
         if not sparse_pretrain and not dense_pretrain:
-            print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*0.04)
+            print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*self.quantization_size)
+
         self.val(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 
     def training_step(self, inputs, sparse_pretrain=False, dense_pretrain=False):
