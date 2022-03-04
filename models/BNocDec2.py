@@ -59,13 +59,18 @@ class BNocDec2(nn.Module):
         # recalculate optimal rotation
         bpred_aligned2scans = []
         for B in range(len(bnocs)):
+            gt_target = bgt_target[B]
+            scan_obj = bscan_obj[B]
             pred_aligned2scans = []
+            j = 0
             for best_rot, pred_R, pred_t  in zip(bbest_rots[B], analyses['pred_noc2scan_R'][B], analyses['pred_noc2scan_t'][B]):
+                aligned2noc = scan_obj[str(gt_target[j])]['aligned2noc']
                 pred_noc2scan = torch.eye(4)
                 pred_noc2scan[:3,:3] = best_rot @ pred_R
                 pred_noc2scan[:3, 3] = pred_t
 
-                pred_aligned2scan = pred_noc2scan @  get_aligned2noc()
+                pred_aligned2scan = pred_noc2scan @ aligned2noc#get_aligned2noc()
+                j += 1
 
                 pred_aligned2scans.append(pred_aligned2scan)
             bpred_aligned2scans.append(pred_aligned2scans)

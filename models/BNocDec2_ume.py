@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
+import traceback
 from torch.nn import functional as F
 from utils.net_utils import (
     vg_crop,
@@ -71,14 +72,20 @@ class BNocDec2_ume(nn.Module):
         return bx_d0_crops
 
     def infer_step(
-        self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, binst_occ=None,
+        self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bgt_target, bscan_obj, bbbox_lvl0: List, binst_occ=None,
     ):
 
         bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
-
+        brot_errors = []
+        btransl_errors = []
         bpred_aligned2scans = []
         for B in range(len(bbbox_lvl0)):
             pred_aligned2scans = []
+            rot_errors = []
+            transl_errors = []
+
+            gt_target = bgt_target[B]
+            scan_obj = bscan_obj[B]
 
             bbox_lvl0 = bbbox_lvl0[B]
             best_rot_angles_y = []
@@ -88,6 +95,9 @@ class BNocDec2_ume(nn.Module):
 
                 scan_noc_inst_crops_grid_coords = torch.nonzero(inst_occ).float()
                 pred_noc_on_gt_inst = bx_d0_crops[B][j][0, :, inst_occ].T
+                # GT
+                aligned2noc = scan_obj[str(gt_target[j])]['aligned2noc']
+                noc2scan = scan_obj[str(gt_target[j])]['noc2scan']
                 try:
                     pred_noc2scan_t, pred_noc2scan_c, pred_noc2scan_R = self.nocs_to_tcr(
                         pred_noc_on_gt_inst, scan_noc_inst_crops_grid_coords + bbox[:3]
@@ -97,16 +107,42 @@ class BNocDec2_ume(nn.Module):
                     pred_noc2scan[:3, :3] = pred_noc2scan_c * pred_noc2scan_R
                     pred_noc2scan[:3, 3] = pred_noc2scan_t
 
-                    pred_aligned2scan = pred_noc2scan @ get_aligned2noc()
+                    pred_aligned2scan = pred_noc2scan @ aligned2noc
                 except:
+                    print('Nocs exception')
+                    try:
+                        pred_noc2scan_t, pred_noc2scan_R = self.nocs_to_tr(
+                            pred_noc_on_gt_inst, scan_noc_inst_crops_grid_coords + bbox[:3]
+                        )
+                    except:
+                        print('also issue')
+                    #traceback.print_exc()
                     pred_noc2scan = torch.eye(4)
-                    pred_noc2scan[:3, 3] = (bbox[3:6] + bbox[:3]) / 2
-                    pred_aligned2scan = pred_noc2scan @ get_aligned2noc()
+                    #pred_noc2scan[:3, 3] = (bbox[3:6] + bbox[:3]) / 2
+                    pred_noc2scan[:3, :3] = pred_noc2scan_R
+                    pred_noc2scan[:3, 3] = pred_noc2scan_t
+                    pred_aligned2scan = pred_noc2scan @ aligned2noc
+
+
+                # Pose predictions
+                gt_scaled_noc2scan_R = (noc2scan[:3, :3] / get_scale(noc2scan[:3, :3])).to(
+                    torch.float32).detach().cpu()
+                relative_compl_loss_R = pred_noc2scan[:3, :3] @ torch.inverse(gt_scaled_noc2scan_R)
+                delta_rot = rotation_matrix_to_angle_axis(relative_compl_loss_R.unsqueeze(0))[0]
+                rot_error = torch.abs(delta_rot) * 180 / np.pi
+                if not torch.isnan(rot_error).any():
+                    rot_errors.append(torch.unsqueeze(rot_error, dim=0))
+
+                transl_error = torch.abs(pred_noc2scan_t - noc2scan[:3, 3]).detach().cpu()
+                if not torch.isnan(transl_error).any():
+                    transl_errors.append(torch.unsqueeze(transl_error, dim=0))
 
                 pred_aligned2scans.append(pred_aligned2scan)
             bpred_aligned2scans.append(pred_aligned2scans)
+            brot_errors.append(rot_errors)
+            btransl_errors.append(transl_errors)
 
-        return {"noc_values": bx_d0_crops, "pred_aligned2scans": bpred_aligned2scans}
+        return {"noc_values": bx_d0_crops, "pred_aligned2scans": bpred_aligned2scans}, (brot_errors, btransl_errors)
 
 
 

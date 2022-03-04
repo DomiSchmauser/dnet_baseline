@@ -12,6 +12,7 @@ class Tracker:
         self.seq_len = 25
         self.match_criterion = 'iou0'
         self.quantization_size = 0.04
+        self.similar_value = 0.5
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
         '''
@@ -50,7 +51,7 @@ class Tracker:
                 for obj in pred_scan_dct.values():
                     has_similar = False
                     for pred_traj in pred_trajectories: # Cad to scan
-                        if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < 0.6 / self.quantization_size: # 0.6m / 0.03 = quantization size?
+                        if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < (self.similar_value / self.quantization_size): # 0.6m / 0.03 = quantization size?
                             has_similar = True
                     if not has_similar: # not an object which is close
                         pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx']}])

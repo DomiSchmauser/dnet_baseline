@@ -139,6 +139,15 @@ class Trainer:
             pin_memory=False,
             drop_last=False)
 
+        self.infer_loader = DataLoader(
+            val_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=self.opt.num_workers,
+            collate_fn=batch_collate_infer,
+            pin_memory=False,
+            drop_last=False)
+
         if not os.path.exists(self.opt.log_dir):
             os.makedirs(self.opt.log_dir)
 
@@ -202,7 +211,16 @@ class Trainer:
 
         print("Starting evaluation ...")
         overall_losses = []
+        rotation_diff = []
+        location_diff = []
         for batch_idx, inputs in enumerate(self.val_loader):
+
+            if int(batch_idx + 1) % 50 == 0:
+                print('Batch {} of {} Batches'.format(int((batch_idx+1)), int(len(self.val_loader))))
+                print('Mean Rotation Error: ', torch.median(torch.cat(rotation_diff, dim=0), dim=0).values,
+                      'Mean Translation Error :',
+                      torch.median(torch.cat(location_diff, dim=0), dim=0).values * self.quantization_size)
+
 
             with torch.no_grad():
                 if self.no_crash_mode:
@@ -227,8 +245,18 @@ class Trainer:
                     loss = losses['total_loss']
                     losses['total_loss'] = loss.item() + rpn_loss.item()
 
+                    for b_idx, scan_rot_diff in enumerate(analyses['noc']['rot_angle_diffs']):
+                        for inst_idx in range(len(scan_rot_diff)):
+                            rotation_diff.append(torch.unsqueeze(scan_rot_diff[inst_idx].detach().cpu(), dim=0))
+                            location_diff.append(
+                                torch.unsqueeze(analyses['noc']['transl_diffs'][b_idx][inst_idx].detach().cpu(), dim=0))
+
+
         log_losses = loss_to_logging(overall_losses)
         self.log("val", log_losses)
+
+        if not sparse_pretrain and not dense_pretrain:
+            print('Mean Rotation Error: ', torch.median(torch.cat(rotation_diff, dim=0), dim=0).values, 'Mean Translation Error :', torch.median(torch.cat(location_diff, dim=0), dim=0).values*self.quantization_size)
 
         if not sparse_pretrain and not dense_pretrain:
             self._save_valmodel(log_losses['total_loss'])
@@ -236,51 +264,112 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=1):
+    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=True):
         """
         Run the entire inference pipeline and perform tracking afterwards
+        mota_log_freq/ 25 = num_sequences per logging
         """
         print("Starting inference and loading models ...")
         self.start_time = time.time()
         self.load_model()
         self.set_eval()
+        self.no_crash_mode = False
+
+        if get_pose_error:
+            self.val(sparse_pretrain=False, dense_pretrain=False)
 
         collection_eval_df = pd.DataFrame()
         collection_gt_eval_df = pd.DataFrame()
         mota_df = pd.DataFrame()
-
         occ_grids = dict()
 
-        for batch_idx, inputs in enumerate(self.val_loader):
-            with torch.no_grad():
-                outputs, bscan_info = self.infer_step(inputs)
+        rotation_errors = []
+        location_errors = []
 
-                if vis and '3deec4df-5cbc-436b-a264-f97c25dddc62_01' in inputs[2][6][0]:
+        for batch_idx, inputs in enumerate(self.infer_loader):
+
+            if int(batch_idx + 1) % 100 == 0:
+                print('Sequence {} of {} Sequences'.format(int((batch_idx+1)/25), int(len(self.infer_loader)/25)))
+
+            with torch.no_grad():
+                if self.no_crash_mode:
+                    try:
+                        outputs, bscan_info = self.infer_step(inputs)
+                    except:
+                        traceback.print_exc()
+                        continue
+                else:
+                    outputs, bscan_info = self.infer_step(inputs)
+
+                if vis and int(batch_idx + 1) % 25 == 0:
                     dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
                     boxes = outputs['rpn']['bbbox_lvl0'][0]
                     for box in boxes:
-                        dvis(torch.unsqueeze(box, dim=0), fmt='box', c=1)
+                        dvis(torch.unsqueeze(box, dim=0), fmt='box', c=3)
 
-                eval_df, gt_eval_df = evaluate(outputs, inputs, None, None)
-                collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
-                collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
-                                                                ignore_index=True)
+                if pose_only:
+                    # Rotation Location error logging
+                    rot_err, loc_err = torch.cat(outputs['errors'][0][0], dim=0), torch.cat(outputs['errors'][1][0], dim=0)
+                    rotation_errors.append(rot_err)
+                    location_errors.append(loc_err)
 
-                # Scan level GT occupancy grids
-                for B, grid in enumerate(inputs[0]):
-                    seq_pattern = "val/(.*?)/coco_data"
-                    scan_pattern = "rgb_(.*?).png"
-                    seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
-                    scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
+                else:
+                    eval_df, gt_eval_df = evaluate(outputs, inputs, None, None)
+                    collection_eval_df: pd.DataFrame = pd.concat([collection_eval_df, eval_df], axis=0, ignore_index=True)
+                    collection_gt_eval_df: pd.DataFrame = pd.concat([collection_gt_eval_df, gt_eval_df], axis=0,
+                                                                    ignore_index=True)
 
-                    if seq_name not in occ_grids:
-                        occ_grids[seq_name] = dict()
-                        grid = torch.squeeze(grid).detach().cpu().numpy()
-                        occ_grids[seq_name][scan_idx] = grid
-                    else:
-                        grid = torch.squeeze(grid).detach().cpu().numpy()
-                        occ_grids[seq_name][scan_idx] = grid
+                    # Scan level GT occupancy grids
+                    for B, grid in enumerate(inputs[0]):
+                        seq_pattern = "val/(.*?)/coco_data"
+                        scan_pattern = "rgb_(.*?).png"
+                        seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
+                        scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
 
+                        if seq_name not in occ_grids:
+                            occ_grids[seq_name] = dict()
+                            grid = torch.squeeze(grid).detach().cpu().numpy()
+                            occ_grids[seq_name][scan_idx] = grid
+                        else:
+                            grid = torch.squeeze(grid).detach().cpu().numpy()
+                            occ_grids[seq_name][scan_idx] = grid
+
+                if int(batch_idx + 1) % 25 == 0:
+
+                    if pose_only:
+                        print('Rotation error :', torch.median(torch.cat(rotation_errors, dim=0), dim=0).values)
+                        print('Location error :', torch.median(torch.cat(location_errors, dim=0), dim=0).values * self.quantization_size)
+                        continue
+
+                    assert len(occ_grids[seq_name]) == 25
+                    # Sort and rearrange df
+                    collection_gt_eval_df.sort_values(by='seq_name')
+                    collection_gt_eval_df.sort_values(by='scan_idx')
+                    collection_eval_df.sort_values(by='seq_name')
+                    collection_eval_df.sort_values(by='scan_idx')
+                    sequences = collection_gt_eval_df['seq_name'].unique().tolist()
+                    for seq_idx, seq in enumerate(sequences):
+                        gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
+                        pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
+                        pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
+                        gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
+                        pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
+                        seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
+                        mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
+
+                    # Cleanup space
+                    collection_eval_df = pd.DataFrame()
+                    collection_gt_eval_df = pd.DataFrame()
+                    occ_grids = dict()
+
+                if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only:
+                    mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
+                    num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
+                    num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
+                    print('Current avg MOTA :', mota_score, ' Current sum Misses :', num_misses,
+                          ' Current sum False Positives :', num_false_positives)
+
+        '''
         # Sort and rearrange df
         collection_gt_eval_df.sort_values(by='seq_name')
         collection_gt_eval_df.sort_values(by='scan_idx')
@@ -302,6 +391,7 @@ class Trainer:
                 num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
                 num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
                 print('Current avg MOTA :', mota_score, ' Current sum Misses :', num_misses, ' Current sum False Positives :', num_false_positives)
+        '''
 
         print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
@@ -386,7 +476,7 @@ class Trainer:
         #self.model_lr_scheduler.step()
 
         if not sparse_pretrain and not dense_pretrain:
-            print('Mean Rotation Error: ', torch.mean(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.mean(torch.cat(location_diff, dim=0), dim=0)*self.quantization_size)
+            print('Mean Rotation Error: ', torch.median(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.median(torch.cat(location_diff, dim=0), dim=0)*self.quantization_size)
 
         self.val(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 
@@ -552,6 +642,7 @@ class Trainer:
         rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
         rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
         rpn_gt['bscan_nocs_mask'] = rpn_features[4]  # list( 3 x X x Y x Z)
+        bscan_obj = rpn_features[5]
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.infer_step(sparse_features)
@@ -564,10 +655,11 @@ class Trainer:
 
         completion_output = self.completion.infer_step(x_d2, x_e2, x_e1, bbbox_lvl0)
         outputs["completion"] = completion_output
-        binst_occ = [[x.squeeze() for x in compls] for compls in outputs["completion"]]
+        binst_occ = [[x.squeeze() for x in compls] for compls in outputs["completion"]] #dim WxHxL
 
-        noc_output = self.noc_infer.infer_step(x_d2, x_e2, x_e1, rpn_gt, bbbox_lvl0, binst_occ)
-        outputs["noc"] = noc_output
+        noc_output = self.noc_infer.infer_step(x_d2, x_e2, x_e1, rpn_gt, bgt_target, bscan_obj, bbbox_lvl0, binst_occ=binst_occ)
+        outputs["noc"] = noc_output[0]
+        outputs['errors'] = noc_output[1]
 
         return outputs, rpn_features[6]
 
