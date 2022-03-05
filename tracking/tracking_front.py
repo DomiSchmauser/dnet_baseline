@@ -12,7 +12,7 @@ class Tracker:
         self.seq_len = 25
         self.match_criterion = 'iou0'
         self.quantization_size = 0.04
-        self.similar_value = 0.5
+        self.similar_value = 0.6
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
         '''
@@ -97,6 +97,29 @@ class Tracker:
 
                         iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
                         traj_prop_matrix[traj_idx, obj_idx] = iou3d
+            elif traj_crit == 'with_prior':
+                if match_criterion == 'iou0' or match_criterion == 'iou0_segm':
+                    surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
+                    obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
+
+                    # obj_j['occ_in_noc'] = obj_j_occ_in_noc
+                    obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
+
+                    for traj_idx, traj in enumerate(trajectories):
+                        start_obj = traj[-1]['obj']
+
+                        if match_criterion == 'iou0':
+                            surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
+                                    start_obj['occ'] > 0))
+                            start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
+
+                            # start_obj['occ_in_noc'] = start_obj_j_occ_in_noc
+
+                        start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
+
+                        iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
+                        traj_prop_matrix[traj_idx, obj_idx] = iou3d
+
 
                         '''
                         if int(list(dscan_j.values())[0]['scan_idx']) - int(traj[-1]['scan_idx']) < 10:

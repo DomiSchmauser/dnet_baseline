@@ -13,7 +13,7 @@ from utils.net_utils import (
     get_aligned2noc,
 )
 from utils.net_utils import cats
-from utils.umeyama import umeyama_torch
+from utils.umeyama import umeyama_torch, estimateSimilarityUmeyama
 from typing import Optional, List
 
 from trimesh.transformations import rotation_matrix, translation_matrix, scale_matrix
@@ -41,32 +41,20 @@ class BNocDec2_ume(nn.Module):
             bbox_lvl0 = bbbox_lvl0[B]
             bbox_lvl2 = (bbox_lvl0 / 4).int()
 
-            x_de2_crops = vg_crop(torch.cat([x_d2[B : B + 1], x_e2[B : B + 1]], 1), bbox_lvl2)
-            x_e1_crops = vg_crop(x_e1[B : B + 1], bbox_lvl2 * 2)
+            x_de2_crops = vg_crop(torch.cat([x_d2[B:B + 1], x_e2[B:B + 1]], 1), bbox_lvl2)
+            x_e1_crops = vg_crop(x_e1[B:B + 1], bbox_lvl2 * 2)
             # simple interpolate
             x_de2_batch_crops = torch.cat(
-                [
-                    F.interpolate(x_de2_crop, size=self.bbox_shape.tolist(), mode="trilinear", align_corners=True)
-                    for x_de2_crop in x_de2_crops
-                ]
-            )
+                [F.interpolate(x_de2_crop, size=self.bbox_shape.tolist(), mode='trilinear', align_corners=True) for
+                 x_de2_crop in x_de2_crops])
             x_e1_batch_crops = torch.cat(
-                [
-                    F.interpolate(x_e1_crop, size=(self.bbox_shape * 2).tolist(), mode="trilinear", align_corners=True)
-                    for x_e1_crop in x_e1_crops
-                ]
-            )
+                [F.interpolate(x_e1_crop, size=(self.bbox_shape * 2).tolist(), mode='trilinear', align_corners=True) for
+                 x_e1_crop in x_e1_crops])
 
             x_d0_batch_crops = self.net.forward(x_de2_batch_crops, x_e1_batch_crops)
-            x_d0_crops = [
-                F.interpolate(
-                    x_d0_batch_crops[i : i + 1],
-                    size=tuple(bbox_lvl0[i, 3:6] - bbox_lvl0[i, :3]),
-                    mode="trilinear",
-                    align_corners=True,
-                )
-                for i in range(len(x_d0_batch_crops))
-            ]
+            x_d0_crops = [F.interpolate(x_d0_batch_crops[i:i + 1], size=tuple(
+                (bbox_lvl0[i, 3:6] - bbox_lvl0[i, :3]).detach().cpu().to(torch.int).tolist()),
+                                        mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
 
             bx_d0_crops.append(x_d0_crops)
         return bx_d0_crops
@@ -92,19 +80,44 @@ class BNocDec2_ume(nn.Module):
             for j in range(len(bbox_lvl0)):
                 bbox = bbox_lvl0[j]
                 inst_occ = binst_occ[B][j]
+                '''
+                if inst_occ.sum() < 5:
+                    bit_mask = np.random.choice([0, 1], size=(inst_occ.shape[-3:]))
+                    inst_occ[..., bit_mask] = 1
+                '''
 
                 scan_noc_inst_crops_grid_coords = torch.nonzero(inst_occ).float()
                 pred_noc_on_gt_inst = bx_d0_crops[B][j][0, :, inst_occ].T
+
                 # GT
                 aligned2noc = scan_obj[str(gt_target[j])]['aligned2noc']
                 noc2scan = scan_obj[str(gt_target[j])]['noc2scan']
+
+                # using GT scale
+                scaled_pred_nocs = pred_noc_on_gt_inst #* get_scale(noc2scan)[0]
+
+
+                try:
+                    pred_noc2scan_t, pred_noc2scan_R = self.nocs_to_tr(
+                        scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3]  # pred_noc_on_gt_inst
+                    )
+                except:
+                    print('also issue')
+                    traceback.print_exc()
+                s = torch.diag(get_scale(noc2scan)[:3]).to(torch.float32)
+                pred_noc2scan = torch.eye(4)
+                pred_noc2scan[:3, :3] = pred_noc2scan_R @ s
+                pred_noc2scan[:3, 3] = pred_noc2scan_t
+                pred_aligned2scan = pred_noc2scan @ aligned2noc
+
+                '''
                 try:
                     pred_noc2scan_t, pred_noc2scan_c, pred_noc2scan_R = self.nocs_to_tcr(
-                        pred_noc_on_gt_inst, scan_noc_inst_crops_grid_coords + bbox[:3]
+                        scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3] #pred_noc_on_gt_inst
                     )
 
                     pred_noc2scan = torch.eye(4)
-                    pred_noc2scan[:3, :3] = pred_noc2scan_c * pred_noc2scan_R
+                    pred_noc2scan[:3, :3] = pred_noc2scan_c @ pred_noc2scan_R
                     pred_noc2scan[:3, 3] = pred_noc2scan_t
 
                     pred_aligned2scan = pred_noc2scan @ aligned2noc
@@ -112,7 +125,7 @@ class BNocDec2_ume(nn.Module):
                     print('Nocs exception')
                     try:
                         pred_noc2scan_t, pred_noc2scan_R = self.nocs_to_tr(
-                            pred_noc_on_gt_inst, scan_noc_inst_crops_grid_coords + bbox[:3]
+                            scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3] #pred_noc_on_gt_inst
                         )
                     except:
                         print('also issue')
@@ -122,18 +135,19 @@ class BNocDec2_ume(nn.Module):
                     pred_noc2scan[:3, :3] = pred_noc2scan_R
                     pred_noc2scan[:3, 3] = pred_noc2scan_t
                     pred_aligned2scan = pred_noc2scan @ aligned2noc
-
+                '''
 
                 # Pose predictions
                 gt_scaled_noc2scan_R = (noc2scan[:3, :3] / get_scale(noc2scan[:3, :3])).to(
-                    torch.float32).detach().cpu()
-                relative_compl_loss_R = pred_noc2scan[:3, :3] @ torch.inverse(gt_scaled_noc2scan_R)
+                    torch.float32)#.detach().cpu()
+                #relative_compl_loss_R = pred_noc2scan[:3, :3] @ torch.inverse(gt_scaled_noc2scan_R)
+                relative_compl_loss_R = pred_noc2scan_R @ torch.inverse(gt_scaled_noc2scan_R)
                 delta_rot = rotation_matrix_to_angle_axis(relative_compl_loss_R.unsqueeze(0))[0]
                 rot_error = torch.abs(delta_rot) * 180 / np.pi
                 if not torch.isnan(rot_error).any():
                     rot_errors.append(torch.unsqueeze(rot_error, dim=0))
 
-                transl_error = torch.abs(pred_noc2scan_t - noc2scan[:3, 3]).detach().cpu()
+                transl_error = torch.abs(pred_noc2scan_t.detach().cpu() - noc2scan[:3, 3].detach().cpu())
                 if not torch.isnan(transl_error).any():
                     transl_errors.append(torch.unsqueeze(transl_error, dim=0))
 
@@ -156,7 +170,8 @@ class BNocDec2_ume(nn.Module):
     def nocs_to_tcr(self, nocs, coords):
 
         indices = np.random.choice(range(len(nocs)), min(len(nocs), self.noc_samples))
-        R, c, t = umeyama_torch(nocs[indices], coords[indices])
+        #R, c, t = umeyama_torch(nocs[indices], coords[indices]) # source target
+        R,c,t = estimateSimilarityUmeyama(nocs[indices].detach().cpu().numpy(), coords[indices].detach().cpu().numpy())
         # +
-        return t, c, R
+        return t, c.to(torch.float32), R
 

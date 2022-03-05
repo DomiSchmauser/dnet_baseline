@@ -264,7 +264,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=True):
+    def inference(self, store_results=False, vis=False, mota_log_freq=50, get_pose_error=False, pose_only=False):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -351,7 +351,7 @@ class Trainer:
                     for seq_idx, seq in enumerate(sequences):
                         gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
                         pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
-                        pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
+                        pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq]) # max IoU nocs with first object change to prior
                         gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
                         pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
                         seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)

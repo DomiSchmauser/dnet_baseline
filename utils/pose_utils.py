@@ -17,15 +17,14 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.04):
     euler = mathutils.Euler(rot_3d)
     rot = np.array(euler.to_matrix())
 
-    # Cad2Scan # Cad2World
+    # Cad2Scan #todo check scale quant only applied to translation or also as scale to translation
     scale_quant = 1/quantization_size
     cad2scan = np.identity(4)
-    cad2scan[:3, :3] = rot
+    cad2scan[:3, :3] = np.diag(scale) @ rot
     cad2scan[:3, 3] = loc_3d * scale_quant
 
     # Noc2Cad
     noc2cad = np.identity(4)
-    noc2cad[:3, :3] = np.diag(scale) @ noc2cad[:3, :3]
 
     # Y axis starts at 0 in cad space and is not centered
     nonzero_inds = np.nonzero(bin_vox)[:-1]

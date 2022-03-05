@@ -150,6 +150,44 @@ def umeyama_torch(from_points, to_points):
     
     return R,c,t
 
+def estimateSimilarityUmeyama(SourceHom, TargetHom):
+
+    SourceCentroid = np.mean(SourceHom[:3, :], axis=1)
+    TargetCentroid = np.mean(TargetHom[:3, :], axis=1)
+    nPoints = SourceHom.shape[1]
+
+    CenteredSource = SourceHom[:3, :] - np.tile(SourceCentroid, (nPoints, 1)).transpose()
+    CenteredTarget = TargetHom[:3, :] - np.tile(TargetCentroid, (nPoints, 1)).transpose()
+
+    CovMatrix = np.matmul(CenteredTarget, np.transpose(CenteredSource)) / nPoints
+
+    if np.isnan(CovMatrix).any():
+        print('nPoints:', nPoints)
+        print(SourceHom.shape)
+        print(TargetHom.shape)
+        raise RuntimeError('There are NANs in the input.')
+
+    U, D, Vh = np.linalg.svd(CovMatrix, full_matrices=True)
+    d = (np.linalg.det(U) * np.linalg.det(Vh)) < 0.0
+    if d:
+        D[-1] = -D[-1]
+        U[:, -1] = -U[:, -1]
+
+    Rotation = np.matmul(U, Vh).T
+
+    varP = np.var(SourceHom[:3, :], axis=1).sum()
+    if varP * np.sum(D) != 0:
+        ScaleFact = 1/varP * np.sum(D)  # scale factor
+    else:
+        ScaleFact = 1  # scale factor set to 1 since otherwise division by 0
+
+    Scales = np.array([ScaleFact, ScaleFact, ScaleFact])
+    ScaleMatrix = np.diag(Scales)
+
+    Translation = TargetHom[:3, :].mean(axis=1) - SourceHom[:3, :].mean(axis=1).dot(ScaleFact*Rotation)
+
+    return torch.from_numpy(Rotation), torch.from_numpy(ScaleMatrix), torch.from_numpy(Translation)
+
 
 
 def kabsch_rot(P_cent, Q_cent):
