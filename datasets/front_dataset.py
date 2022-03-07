@@ -196,7 +196,7 @@ class Front_dataset(Dataset):
                         int(box_3d[2]):int(box_3d[5])] = torch.from_numpy(cropped_obj)
 
                         # Noc2Scan
-                        noc2scan, cad2noc = get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=self.quantization_size)
+                        noc2scan, cad2noc, cad2scan, cad2world = get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=self.quantization_size)
                         rot_3d = np.array(mathutils.Euler(rot_3d).to_matrix())
 
                         if self.debugging_mode:
@@ -213,6 +213,8 @@ class Front_dataset(Dataset):
                             'loc': loc_3d,
                             'noc2scan': noc2scan,
                             'cad2noc': cad2noc,
+                            'cad2scan': cad2scan,
+                            'cad2world': cad2world,
                             'rot_sym': rot_sym,
                         }
                         obj_anns.append(obj)

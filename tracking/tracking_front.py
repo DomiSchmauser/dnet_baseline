@@ -3,6 +3,7 @@ import json
 from trimesh.transformations import translation_matrix, rotation_matrix, scale_and_translate, scale_matrix, reflection_matrix
 import motmetrics as mm
 import pandas as pd
+from dvis import dvis
 
 from utils.net_utils import vg_crop
 
@@ -35,7 +36,7 @@ class Tracker:
             pred_scan_dct = pred_scan.to_dict(orient='index')
 
             cam_free2world_free = list(gt_scan_dct.values())[0]['campose'] #@ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
-            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free
+            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free #todo add shift
             cam_grid2cam_free[:3,3] *= self.quantization_size # Scan2cam
 
             gt_target = []
@@ -59,7 +60,7 @@ class Tracker:
                     gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # All initial objects
             else:
                 # Match trajectories to initial trajectory
-                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='with_first', match_criterion=self.match_criterion, scan_idx=scan_idx)
+                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='alignment', match_criterion=self.match_criterion, scan_idx=scan_idx)
                 for gt_traj in gt_trajectories:
                     for gt_obj in gt_scan_dct.values():
                         if gt_traj[0]['obj']['obj_idx'] == gt_obj['obj_idx']:
@@ -76,11 +77,12 @@ class Tracker:
         obj_idx = 0
         for _, obj_j in dscan_j.items():
             if traj_crit == 'with_first':
-                if match_criterion == 'iou0' or match_criterion == 'iou0_segm':
+                if match_criterion == 'iou0':
                     surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
+                    #dvis(surf_occ, fmt='voxels')
+                    #dvis(box_occ, fmt='voxels', c=2)
                     obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
 
-                    #obj_j['occ_in_noc'] = obj_j_occ_in_noc
                     obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
 
                     for traj_idx, traj in enumerate(trajectories):
@@ -89,14 +91,15 @@ class Tracker:
                         if match_criterion == 'iou0':
                             surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
                                         start_obj['occ'] > 0))
+                            #dvis(surf_occ, fmt='voxels')
                             start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
 
-                            #start_obj['occ_in_noc'] = start_obj_j_occ_in_noc
 
                         start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
 
                         iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
                         traj_prop_matrix[traj_idx, obj_idx] = iou3d
+
             elif traj_crit == 'with_prior':
                 if match_criterion == 'iou0' or match_criterion == 'iou0_segm':
                     surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
@@ -113,28 +116,34 @@ class Tracker:
                                     start_obj['occ'] > 0))
                             start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
 
-                            # start_obj['occ_in_noc'] = start_obj_j_occ_in_noc
 
                         start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
 
                         iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
                         traj_prop_matrix[traj_idx, obj_idx] = iou3d
 
+            elif traj_crit == "alignment":
+                for traj_idx, traj in enumerate(trajectories):
+                    start_obj = traj[0]['obj']
 
-                        '''
-                        if int(list(dscan_j.values())[0]['scan_idx']) - int(traj[-1]['scan_idx']) < 10:
-                            # last hypo of this trajectory is tempory close
-                            prev_obj = traj[-1]['obj']
-                            prev_prop_matrix[traj_idx, obj_idx] = np.linalg.norm(
-                                (cam_grid2cam_free @ prev_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j['pred_aligned2scan'])[:3, 3]) # compare cad to cam preds
-                        '''
+                    prev_prop_matrix[traj_idx, obj_idx] = np.linalg.norm(
+                        (cam_grid2cam_free @ start_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j[
+                            'pred_aligned2scan'])[:3, 3])  # compare cad to cam preds
+
+
             obj_idx += 1
 
         # Use max IoU current object with start object to build trajectory
-        for traj_id, traj_ious in enumerate(traj_prop_matrix):
-            idx_miou = np.argmax(traj_ious)
-            obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx':scan_idx}
-            trajectories[traj_id].append(obj_dict)
+        if traj_crit == 'alignment':
+            for traj_id, traj_ious in enumerate(prev_prop_matrix):
+                idx_miou = np.argmin(traj_ious) # minimal distance
+                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx}
+                trajectories[traj_id].append(obj_dict)
+        else:
+            for traj_id, traj_ious in enumerate(traj_prop_matrix):
+                idx_miou = np.argmax(traj_ious)
+                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx':scan_idx}
+                trajectories[traj_id].append(obj_dict)
 
         return trajectories
 

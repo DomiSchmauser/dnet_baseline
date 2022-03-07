@@ -83,10 +83,7 @@ def batch_collate_cpu(batch):
             obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()  # counts True elements in scan
             obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan'])
             obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
-            obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.04)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, :3] = torch.from_numpy(obj['rot'])
-            obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
+            obj_feats[str(obj_idx)]['aligned2scan'] = torch.from_numpy(obj['cad2scan']).to(torch.float32)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
 
             bboxes.append(np.expand_dims(box_3d, 0))
@@ -203,10 +200,7 @@ def batch_collate(batch):
             obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()  # counts True elements in scan
             obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
             obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
-            obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4).to(device)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.04)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, :3] = torch.from_numpy(obj['rot'])
-            obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
+            obj_feats[str(obj_idx)]['aligned2scan'] = torch.from_numpy(obj['cad2scan']).to(torch.float32).to(device)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
 
             bboxes.append(np.expand_dims(box_3d, 0))
@@ -324,14 +318,10 @@ def batch_collate_infer(batch):
             obj_feats[str(obj_idx)]['class_name'] = obj['class_name']
             obj_feats[str(obj_idx)]['category_id'] = obj['category_id']
             obj_feats[str(obj_idx)]['num_occ'] = obj_scan_mask.sum()  # counts True elements in scan
-            obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
             obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
-            obj_feats[str(obj_idx)]['aligned2scan'] = torch.eye(4).to(device)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, 3] = torch.from_numpy(obj['loc'] * 1/0.04)
-            obj_feats[str(obj_idx)]['aligned2scan'][:3, :3] = torch.from_numpy(obj['rot'])
-            obj_feats[str(obj_idx)]['cad2world'] = torch.eye(4).to(device)
-            obj_feats[str(obj_idx)]['cad2world'][:3, 3] = torch.from_numpy(obj['loc'])
-            obj_feats[str(obj_idx)]['cad2world'][:3, :3] = torch.from_numpy(obj['rot'])
+            obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
+            obj_feats[str(obj_idx)]['aligned2scan'] = torch.from_numpy(obj['cad2scan']).to(torch.float32).to(device)
+            obj_feats[str(obj_idx)]['cad2world'] = torch.from_numpy(obj['cad2world']).to(torch.float32).to(device)
             obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
 

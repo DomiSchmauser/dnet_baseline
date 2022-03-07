@@ -209,16 +209,16 @@ class BNocDec2(nn.Module):
 
                 pred_scaled_noc2scan_t, pred_scaled_noc2scan_R = self.nocs_to_tr(scaled_pred_nocs, scan_noc_inst_crops_grid_coords + bbox[:3]) # shift to true coords
                 s = torch.diag(get_scale(noc2scan)[:3]).cuda().to(torch.float32)
-                pred_noc2scan_R = pred_scaled_noc2scan_R @ s
+                pred_noc2scan_R = pred_scaled_noc2scan_R @ s #todo only rotation?
                 pred_noc2scan_t = pred_scaled_noc2scan_t
 
                 gt_scaled_noc2scan_R = (noc2scan[:3,:3] / get_scale(noc2scan[:3,:3])).to(torch.float32) @ angle_axis_to_rotation_matrix(torch.Tensor([[0, -best_rot_angle_y, 0]]))[0,:3,:3].cuda()
 
                 # Rotational error
-                relative_compl_loss_R = pred_scaled_noc2scan_R @ torch.inverse(gt_scaled_noc2scan_R)
+                relative_compl_loss_R = pred_scaled_noc2scan_R @ torch.inverse(gt_scaled_noc2scan_R) #todo scaled vs unscaled?
                 
-                rot_gt_compl_loss_j = torch.norm(relative_compl_loss_R - torch.eye(3).cuda())
-                transl_gt_compl_loss_j = torch.norm((pred_noc2scan_t - noc2scan[:3,3])/10)
+                rot_gt_compl_loss_j = torch.norm(relative_compl_loss_R - torch.eye(3).cuda()) #todo check important for loss
+                transl_gt_compl_loss_j = torch.norm((pred_noc2scan_t - noc2scan[:3,3])/10) #todo check important for loss
 
                 delta_rot = rotation_matrix_to_angle_axis(relative_compl_loss_R.unsqueeze(0))[0]
                 analyses['rot_angle_diffs'] = analyses.get('rot_angle_diffs', []) + [torch.abs(delta_rot) * 180 / np.pi]
@@ -246,7 +246,7 @@ class BNocDec2(nn.Module):
             noc_gt_compl_loss = torch.stack(noc_gt_compl_losses)
             rot_gt_compl_loss = torch.stack(rot_gt_compl_losses)
             transl_gt_compl_loss = torch.stack(transl_gt_compl_losses)
-            weighted_loss = self.noc_weight *  noc_gt_compl_loss + self.rot_weight * rot_gt_compl_loss + self.transl_weight * transl_gt_compl_loss
+            weighted_loss = self.noc_weight * noc_gt_compl_loss + self.rot_weight * rot_gt_compl_loss + self.transl_weight * transl_gt_compl_loss
 
             bnoc_gt_compl_losses.append(noc_gt_compl_loss)
             brot_gt_compl_losses.append(rot_gt_compl_loss)

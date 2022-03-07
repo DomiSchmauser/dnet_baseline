@@ -19,9 +19,15 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.04):
 
     # Cad2Scan #todo check scale quant only applied to translation or also as scale to translation
     scale_quant = 1/quantization_size
-    cad2scan = np.identity(4)
-    cad2scan[:3, :3] = np.diag(scale) @ rot
-    cad2scan[:3, 3] = loc_3d * scale_quant
+    cad2world = np.identity(4)
+    cad2world[:3, :3] = np.diag(scale) @ rot
+    cad2world[:3, 3] = loc_3d #* scale_quant
+
+    world2scan = np.identity(4)
+    world2scan[:3, :3] = np.diag([scale_quant, scale_quant, scale_quant])
+
+    cad2scan = world2scan @ cad2world
+
 
     # Noc2Cad
     noc2cad = np.identity(4)
@@ -37,7 +43,7 @@ def get_noc2scan(rot_3d, loc_3d, scale, bin_vox, quantization_size=0.04):
 
     noc2scan = cad2scan @ noc2cad # cad2scan @ noc2cad = noc2scan?? -> lower with now
 
-    return noc2scan, cad2noc
+    return noc2scan, cad2noc, cad2scan, cad2world
 
 def occ2noc(cropped_obj, box_3d, euler_rot):
     '''

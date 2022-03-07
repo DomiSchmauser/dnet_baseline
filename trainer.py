@@ -215,7 +215,7 @@ class Trainer:
         location_diff = []
         for batch_idx, inputs in enumerate(self.val_loader):
 
-            if int(batch_idx + 1) % 50 == 0:
+            if int(batch_idx + 1) % 50 == 0 and not sparse_pretrain and not dense_pretrain:
                 print('Batch {} of {} Batches'.format(int((batch_idx+1)), int(len(self.val_loader))))
                 print('Mean Rotation Error: ', torch.median(torch.cat(rotation_diff, dim=0), dim=0).values,
                       'Mean Translation Error :',
@@ -264,7 +264,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=50, get_pose_error=False, pose_only=False):
+    def inference(self, store_results=False, vis=False, mota_log_freq=50, get_pose_error=False, pose_only=True):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -368,30 +368,6 @@ class Trainer:
                     num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
                     print('Current avg MOTA :', mota_score, ' Current sum Misses :', num_misses,
                           ' Current sum False Positives :', num_false_positives)
-
-        '''
-        # Sort and rearrange df
-        collection_gt_eval_df.sort_values(by='seq_name')
-        collection_gt_eval_df.sort_values(by='scan_idx')
-        collection_eval_df.sort_values(by='seq_name')
-        collection_eval_df.sort_values(by='scan_idx')
-
-        sequences = collection_gt_eval_df['seq_name'].unique().tolist()
-        for seq_idx, seq in enumerate(sequences):
-            gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
-            pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
-            pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
-            gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
-            pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
-            seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
-            mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
-
-            if int(seq_idx + 1) % mota_log_freq == 0:
-                mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
-                num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
-                num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
-                print('Current avg MOTA :', mota_score, ' Current sum Misses :', num_misses, ' Current sum False Positives :', num_false_positives)
-        '''
 
         print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
