@@ -264,7 +264,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=50, get_pose_error=False, pose_only=True):
+    def inference(self, store_results=False, vis=False, mota_log_freq=25, get_pose_error=False, pose_only=False):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -452,7 +452,7 @@ class Trainer:
         #self.model_lr_scheduler.step()
 
         if not sparse_pretrain and not dense_pretrain:
-            print('Mean Rotation Error: ', torch.median(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.median(torch.cat(location_diff, dim=0), dim=0)*self.quantization_size)
+            print('Mean Rotation Error: ', torch.median(torch.cat(rotation_diff, dim=0), dim=0), 'Mean Translation Error :', torch.median(torch.cat(location_diff, dim=0), dim=0).values*self.quantization_size)
 
         self.val(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
 

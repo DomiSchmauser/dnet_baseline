@@ -201,6 +201,7 @@ def batch_collate(batch):
             obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan']).to(device)
             obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
             obj_feats[str(obj_idx)]['aligned2scan'] = torch.from_numpy(obj['cad2scan']).to(torch.float32).to(device)
+            obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
 
             bboxes.append(np.expand_dims(box_3d, 0))

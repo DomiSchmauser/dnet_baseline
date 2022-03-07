@@ -5,7 +5,8 @@ import motmetrics as mm
 import pandas as pd
 from dvis import dvis
 
-from utils.net_utils import vg_crop
+from utils.net_utils import vg_crop, get_scale
+
 
 class Tracker:
 
@@ -13,7 +14,9 @@ class Tracker:
         self.seq_len = 25
         self.match_criterion = 'iou0'
         self.quantization_size = 0.04
-        self.similar_value = 0.6
+        self.similar_value = 0.5
+        self.iou_thres = 0.0
+        self.dist_thres = 100.25
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
         '''
@@ -36,8 +39,11 @@ class Tracker:
             pred_scan_dct = pred_scan.to_dict(orient='index')
 
             cam_free2world_free = list(gt_scan_dct.values())[0]['campose'] #@ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
-            cam_grid2cam_free = np.linalg.inv(cam_free2world_free) #@ gt_dscan_i.scan2world # maybe discretized to free #todo add shift
-            cam_grid2cam_free[:3,3] *= self.quantization_size # Scan2cam
+            world2cam = np.linalg.inv(cam_free2world_free) # maybe discretized to free #todo add shift???
+
+            scan2world = np.identity(4)
+            scan2world[:3, :3] = np.diag([self.quantization_size, self.quantization_size, self.quantization_size])
+            cam_grid2cam_free = world2cam @ scan2world # Scan2cam
 
             gt_target = []
             for gt_t in list(gt_scan_dct.values()):
@@ -60,8 +66,8 @@ class Tracker:
                     gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # All initial objects
             else:
                 # Match trajectories to initial trajectory
-                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='alignment', match_criterion=self.match_criterion, scan_idx=scan_idx)
-                for gt_traj in gt_trajectories:
+                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='with_first', match_criterion=self.match_criterion, scan_idx=scan_idx)
+                for gt_traj in gt_trajectories: #todo what if new gt obj initializes new trajectory
                     for gt_obj in gt_scan_dct.values():
                         if gt_traj[0]['obj']['obj_idx'] == gt_obj['obj_idx']:
                             gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}) # build list per trajectory
@@ -79,8 +85,9 @@ class Tracker:
             if traj_crit == 'with_first':
                 if match_criterion == 'iou0':
                     surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
-                    #dvis(surf_occ, fmt='voxels')
-                    #dvis(box_occ, fmt='voxels', c=2)
+                    dvis(surf_occ, fmt='voxels')
+                    compl = obj_j['occ'] > 0
+                    dvis(compl, fmt='voxels')
                     obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
 
                     obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
@@ -91,7 +98,7 @@ class Tracker:
                         if match_criterion == 'iou0':
                             surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
                                         start_obj['occ'] > 0))
-                            #dvis(surf_occ, fmt='voxels')
+                            dvis(surf_occ, fmt='voxels')
                             start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
 
 
@@ -103,6 +110,7 @@ class Tracker:
             elif traj_crit == 'with_prior':
                 if match_criterion == 'iou0' or match_criterion == 'iou0_segm':
                     surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
+
                     obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
 
                     # obj_j['occ_in_noc'] = obj_j_occ_in_noc
@@ -130,20 +138,27 @@ class Tracker:
                         (cam_grid2cam_free @ start_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j[
                             'pred_aligned2scan'])[:3, 3])  # compare cad to cam preds
 
-
             obj_idx += 1
 
         # Use max IoU current object with start object to build trajectory
         if traj_crit == 'alignment':
-            for traj_id, traj_ious in enumerate(prev_prop_matrix):
-                idx_miou = np.argmin(traj_ious) # minimal distance
+            for traj_id, traj_dists in enumerate(prev_prop_matrix):
+                idx_miou = np.argmin(traj_dists) # minimal distance
                 obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx}
-                trajectories[traj_id].append(obj_dict)
+                if traj_dists[idx_miou] < self.dist_thres:
+                    trajectories[traj_id].append(obj_dict)
+                else:
+                    trajectories.append([obj_dict])
         else:
             for traj_id, traj_ious in enumerate(traj_prop_matrix):
                 idx_miou = np.argmax(traj_ious)
-                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx':scan_idx}
-                trajectories[traj_id].append(obj_dict)
+                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx}
+
+                # If IoU less than 0.3 start a new trajectory
+                if traj_ious[idx_miou] >= self.iou_thres:
+                    trajectories[traj_id].append(obj_dict)
+                else:
+                    trajectories.append([obj_dict])
 
         return trajectories
 
@@ -153,11 +168,14 @@ class Tracker:
         for k in range(len(traj)):
             scan_idx = traj[k]['scan_idx']
             if 'gt' in traj_id:
+                cad2scan = traj[k]['obj']['aligned2scan']
+                #cad2scan[:3,:3] /= get_scale(traj[k]['obj']['aligned2scan'][:3, :3])
+                aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ cad2scan  # CAD2CAM
                 #aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['aligned2scan'] # CAD2CAM
-                aligned2cam_free = traj[k]['obj']['aligned2scan'] # CAD2CAM
+                #aligned2cam_free = traj[k]['obj']['aligned2scan'] # CAD2CAM
             else:
-                #aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['pred_aligned2scan']
-                aligned2cam_free =  traj[k]['obj']['pred_aligned2scan']
+                aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['pred_aligned2scan']
+                #aligned2cam_free =  traj[k]['obj']['pred_aligned2scan']
 
             aligned2world_free = seq_data[scan_idx]['cam_free2world_free'] @ aligned2cam_free # CAD2WORLD
             cam_t = aligned2cam_free[:3, 3]
@@ -209,10 +227,9 @@ class Tracker:
 
     def eval_mota(self, pred_table, mov_obj_traj_table):
         # compute mota based on l2_th
-        l2_th = 0.25
+        l2_th = 0.35
 
         mh = mm.metrics.create()
-        all_traj_summary = pd.DataFrame()
 
         #for pred_traj_id in pred_table['traj_id'].drop_duplicates():
         acc = mm.MOTAccumulator(auto_id=True)
@@ -239,7 +256,7 @@ class Tracker:
                     gt_cam = gt_cams[i,:]
                     # SINGLE GT OBJECT THOUGH
                     #value_dist = mm.distances.norm2squared_matrix(gt_cam * self.quantization_size, hypo_cam * self.quantization_size)#, max_d2=l2_th)
-                    dist_matrix[i][j] = mm.distances.norm2squared_matrix(gt_cam * self.quantization_size, hypo_cam * self.quantization_size, max_d2=l2_th)
+                    dist_matrix[i][j] = mm.distances.norm2squared_matrix(gt_cam, hypo_cam, max_d2=l2_th)
                     # l2 distance between gt object and hypothesis, capped to l2_th
 
             acc.update(

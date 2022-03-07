@@ -46,11 +46,11 @@ class Options:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=60)
+                                 default=45)
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=4)
+                                 default=8)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",
@@ -66,12 +66,12 @@ class Options:
         self.parser.add_argument("--start_saving",
                                  type=int,
                                  help="epoch start to save weights",
-                                 default=15)
+                                 default=0)
 
         self.parser.add_argument("--start_saving_optimizer",
                                  type=int,
                                  help="epoch start to save weights",
-                                 default=14)
+                                 default=0)
 
         self.parser.add_argument("--log_frequency",
                                  type=int,
@@ -86,7 +86,7 @@ class Options:
         self.parser.add_argument("--resume",
                                  type=bool,
                                  help="resume training",
-                                 default=False)
+                                 default=True)
 
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
