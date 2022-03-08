@@ -60,13 +60,26 @@ class Tracker:
 
             # Initialize trajectory
             if scan_idx == 0:
+                initial_gt_ids = []
                 for obj in pred_scan_dct.values():
                     has_similar = False
                     for pred_traj in pred_trajectories: # Cad to scan
                         if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < (self.similar_value / self.quantization_size): # 0.6m / 0.03 = quantization size?
                             has_similar = True
                     if not has_similar: # not an object which is close #todo add check if gt id already in object
-                        pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx'], 'shift':shift_coords}])
+                        if obj['gt_target'] not in initial_gt_ids:
+                            pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx'], 'shift':shift_coords}])
+                            initial_gt_ids.append(obj['gt_target'])
+                        else:
+                            new_rpn_iou = obj['rpn_iou']
+                            for drop_idx, pred_obj in enumerate(pred_trajectories):
+                                if pred_obj[0]['obj']['gt_target'] == obj['gt_target']:
+                                    old_rpn_iou = pred_obj[0]['obj']['rpn_iou']
+                                    break
+                            if new_rpn_iou > old_rpn_iou:
+                                del pred_trajectories[drop_idx]
+                                pred_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx'], 'shift': shift_coords}])
+
                 for gt_obj in gt_scan_dct.values():
                     gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}])
             else:
@@ -93,6 +106,7 @@ class Tracker:
         traj_prop_matrix = np.zeros((len(trajectories), len(dscan_j.values())))
         iou_prop_matrix = np.zeros((len(trajectories), len(dscan_j.values())))
         prev_prop_matrix = 1000 * np.ones((len(trajectories), len(dscan_j.values())))
+        target_list = []
         obj_idx = 0
         for _, obj_j in dscan_j.items():
             if traj_crit == 'with_first':
@@ -124,6 +138,10 @@ class Tracker:
                     box_iou = self.get_iou_box(current_box, prior_box)
                     iou_prop_matrix[traj_idx, obj_idx] = box_iou
 
+                    # Get GT Target list
+                    if (obj_idx+1) == len(dscan_j.values()):
+                        target_list.append(prior_obj['gt_target'])
+
             elif traj_crit == "alignment":
                 for traj_idx, traj in enumerate(trajectories):
                     start_obj = traj[0]['obj']
@@ -154,11 +172,13 @@ class Tracker:
                     # If IoU less than 0.3 check overlap occ
                     traj_occ_ious = traj_prop_matrix.T[obj_id]
                     idx_miou = np.argmax(traj_occ_ious)
-                    if traj_occ_ious[idx_miou] >= 0.2:
+                    if traj_occ_ious[idx_miou] >= 0.1:
                         if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx:
                             trajectories[idx_miou].append(obj_dict)
-                    else:
-                        trajectories.append([obj_dict])
+                    else: #todo added check for new trajectories if not in target list
+                        if obj_dict['obj']['gt_target'] not in target_list:
+                            trajectories.append([obj_dict])
+                            target_list.append(obj_dict['obj']['gt_target'])
 
         return trajectories
 
@@ -223,7 +243,7 @@ class Tracker:
 
     def eval_mota(self, pred_table, mov_obj_traj_table):
         # compute mota based on l2_th
-        l2_th = 0.25
+        l2_th = 0.4
 
         mh = mm.metrics.create()
 

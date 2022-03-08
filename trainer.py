@@ -337,8 +337,6 @@ class Trainer:
                             occ_grids[seq_name][scan_idx] = grid
 
                 if int(batch_idx + 1) % 25 == 0:
-                    self.Tracker = Tracker()
-
                     if pose_only:
                         print('Rotation error :', torch.median(torch.cat(rotation_errors, dim=0), dim=0).values)
                         print('Location error :', torch.median(torch.cat(location_errors, dim=0), dim=0).values * self.quantization_size)

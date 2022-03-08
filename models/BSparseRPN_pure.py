@@ -103,7 +103,7 @@ class BSparseRPN_pure(nn.Module):
             pred_bboxes[:, 4] = torch.clamp(pred_bboxes[:, 4], max=rpn_gt['scan_shape'][1]-1) # y max
             pred_bboxes[:, 5] = torch.clamp(pred_bboxes[:, 5], max=rpn_gt['scan_shape'][2]-1) # z max in voxel coords
 
-            nms_filtered = nms3d(pred_bboxes.float(), pred_confs, 0.4)
+            nms_filtered = nms3d(pred_bboxes.float(), pred_confs, 0.4) #todo important value default 0.4
             pred_bboxes = pred_bboxes[nms_filtered]
             pred_confs = pred_confs[nms_filtered]
 
