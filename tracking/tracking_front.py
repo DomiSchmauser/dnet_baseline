@@ -13,7 +13,7 @@ class Tracker:
     def __init__(self):
         self.seq_len = 25
         self.quantization_size = 0.04
-        self.similar_value = 0.4
+        self.similar_value = 0.3
         self.iou_thres = 0.3
         self.dist_thres = 100
 
@@ -67,21 +67,23 @@ class Tracker:
                             has_similar = True
                     if not has_similar: # not an object which is close #todo add check if gt id already in object
                         pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx'], 'shift':shift_coords}])
-                for obj in gt_scan_dct.values():
-                    gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # All initial objects
+                for gt_obj in gt_scan_dct.values():
+                    gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}])
             else:
                 # Match trajectories to initial trajectory
                 pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, occ_grid=occ_grid, traj_crit='with_first', shift=shift_coords, scan_idx=scan_idx)
-                for gt_traj in gt_trajectories:
+                for gt_obj in gt_scan_dct.values():
                     matched = False
-                    for gt_obj in gt_scan_dct.values():
-                        if gt_traj[0]['obj']['obj_idx'] == gt_obj['obj_idx']:
-                            gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}) # build list per trajectory
+                    for gt_traj in gt_trajectories:
+                        if gt_obj['obj_idx'] == gt_traj[0]['obj']['obj_idx']:
+                            gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']})  # build list per trajectory
                             matched = True
                             break
 
                     if not matched:
-                        gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # start new trajectory #todo check if works
+                        gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}]) # start new trajectory #todo check if works
+
+
 
         return pred_trajectories, gt_trajectories, seq_data
 
@@ -356,4 +358,16 @@ class Tracker:
               trajectories[traj_id].append(obj_dict)
           else:
               trajectories.append([obj_dict])
-  '''
+    
+    GT TRAJ MATCHING 
+    for gt_traj in gt_trajectories:
+        matched = False 
+        for gt_obj in gt_scan_dct.values():
+            if gt_traj[0]['obj']['obj_idx'] == gt_obj['obj_idx']:
+                gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}) # build list per trajectory
+                matched = True
+                break
+
+        if not matched:
+            gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}]) # start new trajectory #todo check if works
+    '''

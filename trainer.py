@@ -292,6 +292,8 @@ class Trainer:
                 print('Sequence {} of {} Sequences'.format(int((batch_idx+1)/25), int(len(self.infer_loader)/25)))
 
             with torch.no_grad():
+                outputs, bscan_info = self.infer_step(inputs)
+                '''
                 if self.no_crash_mode:
                     try:
                         outputs, bscan_info = self.infer_step(inputs)
@@ -299,7 +301,7 @@ class Trainer:
                         traceback.print_exc()
                         continue
                 else:
-                    outputs, bscan_info = self.infer_step(inputs)
+                '''
 
                 if vis and int(batch_idx + 1) % 25 == 0:
                     dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
@@ -335,6 +337,7 @@ class Trainer:
                             occ_grids[seq_name][scan_idx] = grid
 
                 if int(batch_idx + 1) % 25 == 0:
+                    self.Tracker = Tracker()
 
                     if pose_only:
                         print('Rotation error :', torch.median(torch.cat(rotation_errors, dim=0), dim=0).values)
