@@ -50,6 +50,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
     bscan_obj = rpn_features[5]
     bscan_info = rpn_features[6]
     bcam_info = rpn_features[7]
+    bshift_info = rpn_features[8]
 
     bbbox_lvl0, bgt_target, brpn_conf = outputs['rpn']['bbbox_lvl0'], outputs['rpn']['bgt_target'], outputs['rpn']['brpn_conf']
     
@@ -62,6 +63,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
         seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
         scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
         campose = bcam_info[B]
+        shift = bshift_info[B]
 
         # Scan2World -> undo discretization, Occupancy grid dense
 
@@ -79,6 +81,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
             #dscan_gt_df['cad2world'] = [bscan_obj[B][str(obj_idx)]['cad2world'].detach().cpu().numpy()]
             dscan_gt_df['scan_coverage'] = [bscan_obj[B][str(obj_idx)]['num_occ']]
             dscan_gt_df['campose'] = [campose]
+            dscan_gt_df['shift'] = [shift]
 
             bdscan_gt_df = pd.concat([bdscan_gt_df, dscan_gt_df], axis=0)
         

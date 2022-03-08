@@ -12,11 +12,10 @@ class Tracker:
 
     def __init__(self):
         self.seq_len = 25
-        self.match_criterion = 'iou0'
         self.quantization_size = 0.04
-        self.similar_value = 0.5
-        self.iou_thres = 0.0
-        self.dist_thres = 100.25
+        self.similar_value = 0.4
+        self.iou_thres = 0.3
+        self.dist_thres = 100
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
         '''
@@ -38,19 +37,25 @@ class Tracker:
             gt_scan_dct = gt_scan.to_dict(orient='index')  # idxs, clmn
             pred_scan_dct = pred_scan.to_dict(orient='index')
 
-            cam_free2world_free = list(gt_scan_dct.values())[0]['campose'] #@ reflection_matrix([0, 0, 0], [0, 0, 1]) # Cam2world
-            world2cam = np.linalg.inv(cam_free2world_free) # maybe discretized to free #todo add shift???
+            shift_free = list(gt_scan_dct.values())[0]['shift'] # world to normalizedworld
+            shift_coords = shift_free * (1 / self.quantization_size)
+            world2normworld = np.identity(4)
+            world2normworld[:3, 3] = shift_free # in original coords #todo check if correct
+
+            cam2world = list(gt_scan_dct.values())[0]['campose'] # Cam2world
+            cam_free2world_free = cam2world # Cam2world normed
+            normworld2cam = np.linalg.inv(cam2world)
 
             scan2world = np.identity(4)
             scan2world[:3, :3] = np.diag([self.quantization_size, self.quantization_size, self.quantization_size])
-            cam_grid2cam_free = world2cam @ scan2world # Scan2cam
+            cam_grid2cam_free = normworld2cam @ world2normworld @ scan2world # Scan2cam
 
             gt_target = []
             for gt_t in list(gt_scan_dct.values()):
                 gt_target.append(gt_t['obj_idx'])
 
-            seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free,
-                                  'cam_grid2cam_free': cam_grid2cam_free,
+            seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free, # cam2world
+                                  'cam_grid2cam_free': cam_grid2cam_free, # Scan2cam
                                   'gt_target': gt_target}
 
             # Initialize trajectory
@@ -60,75 +65,62 @@ class Tracker:
                     for pred_traj in pred_trajectories: # Cad to scan
                         if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < (self.similar_value / self.quantization_size): # 0.6m / 0.03 = quantization size?
                             has_similar = True
-                    if not has_similar: # not an object which is close
-                        pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx']}])
+                    if not has_similar: # not an object which is close #todo add check if gt id already in object
+                        pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx'], 'shift':shift_coords}])
                 for obj in gt_scan_dct.values():
                     gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # All initial objects
             else:
                 # Match trajectories to initial trajectory
-                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, None, occ_grid=occ_grid, traj_crit='with_first', match_criterion=self.match_criterion, scan_idx=scan_idx)
-                for gt_traj in gt_trajectories: #todo what if new gt obj initializes new trajectory
+                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, occ_grid=occ_grid, traj_crit='with_first', shift=shift_coords, scan_idx=scan_idx)
+                for gt_traj in gt_trajectories:
+                    matched = False
                     for gt_obj in gt_scan_dct.values():
                         if gt_traj[0]['obj']['obj_idx'] == gt_obj['obj_idx']:
                             gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}) # build list per trajectory
+                            matched = True
                             break
+
+                    if not matched:
+                        gt_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx']}]) # start new trajectory #todo check if works
 
         return pred_trajectories, gt_trajectories, seq_data
 
-    def pred_trajectory(self, trajectories, dscan_j, cam_grid2cam_free, obj0, occ_grid=None, traj_crit='with_first', match_criterion='iou0', scan_idx=None):
+    def pred_trajectory(self, trajectories, dscan_j, cam_grid2cam_free, occ_grid=None, traj_crit='with_first', shift=None, scan_idx=None):
 
         # assign proposals to trajectories based on traj_crit and match_criterion
         traj_prop_matrix = np.zeros((len(trajectories), len(dscan_j.values())))
+        iou_prop_matrix = np.zeros((len(trajectories), len(dscan_j.values())))
         prev_prop_matrix = 1000 * np.ones((len(trajectories), len(dscan_j.values())))
         obj_idx = 0
         for _, obj_j in dscan_j.items():
             if traj_crit == 'with_first':
-                if match_criterion == 'iou0':
-                    surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
-                    dvis(surf_occ, fmt='voxels')
-                    compl = obj_j['occ'] > 0
-                    dvis(compl, fmt='voxels')
-                    obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
+                # Voxel occupancy comparison
+                surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
+                #dvis(surf_occ, fmt='voxels')
+                #dvis(compl, fmt='voxels')
+                obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
+                obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
 
-                    obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
+                for traj_idx, traj in enumerate(trajectories):
+                    start_obj = traj[0]['obj']
+                    prior_obj = traj[-1]['obj']
 
-                    for traj_idx, traj in enumerate(trajectories):
-                        start_obj = traj[0]['obj']
+                    # Voxel occupancy comparison
+                    surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
+                                start_obj['occ'] > 0))
+                    #dvis(surf_occ, fmt='voxels')
+                    start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
+                    start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
 
-                        if match_criterion == 'iou0':
-                            surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
-                                        start_obj['occ'] > 0))
-                            dvis(surf_occ, fmt='voxels')
-                            start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
+                    # Voxel IoU
+                    iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
+                    traj_prop_matrix[traj_idx, obj_idx] = iou3d
 
-
-                        start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
-
-                        iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
-                        traj_prop_matrix[traj_idx, obj_idx] = iou3d
-
-            elif traj_crit == 'with_prior':
-                if match_criterion == 'iou0' or match_criterion == 'iou0_segm':
-                    surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
-
-                    obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
-
-                    # obj_j['occ_in_noc'] = obj_j_occ_in_noc
-                    obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
-
-                    for traj_idx, traj in enumerate(trajectories):
-                        start_obj = traj[-1]['obj']
-
-                        if match_criterion == 'iou0':
-                            surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
-                                    start_obj['occ'] > 0))
-                            start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
-
-
-                        start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
-
-                        iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
-                        traj_prop_matrix[traj_idx, obj_idx] = iou3d
+                    # Box IoU -> first shift to reset scan differences
+                    prior_box = self.box_to_world(prior_obj['bbox'], traj[-1]['shift'])
+                    current_box = self.box_to_world(obj_j['bbox'], shift)
+                    box_iou = self.get_iou_box(current_box, prior_box)
+                    iou_prop_matrix[traj_idx, obj_idx] = box_iou
 
             elif traj_crit == "alignment":
                 for traj_idx, traj in enumerate(trajectories):
@@ -144,21 +136,27 @@ class Tracker:
         if traj_crit == 'alignment':
             for traj_id, traj_dists in enumerate(prev_prop_matrix):
                 idx_miou = np.argmin(traj_dists) # minimal distance
-                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx}
+                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx, 'shift':shift}
                 if traj_dists[idx_miou] < self.dist_thres:
                     trajectories[traj_id].append(obj_dict)
                 else:
                     trajectories.append([obj_dict])
         else:
-            for traj_id, traj_ious in enumerate(traj_prop_matrix):
-                idx_miou = np.argmax(traj_ious)
-                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx}
-
-                # If IoU less than 0.3 start a new trajectory
-                if traj_ious[idx_miou] >= self.iou_thres:
-                    trajectories[traj_id].append(obj_dict)
+            for obj_id, obj_ious in enumerate(iou_prop_matrix.T): #after T rows objs clmns traj
+                idx_miou = np.argmax(obj_ious)
+                obj_dict = {'obj': list(dscan_j.values())[obj_id], 'scan_idx': scan_idx, 'shift': shift}
+                if obj_ious[idx_miou] >= self.iou_thres:
+                    if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx: # skip if object with same scan idx already matched
+                        trajectories[idx_miou].append(obj_dict)
                 else:
-                    trajectories.append([obj_dict])
+                    # If IoU less than 0.3 check overlap occ
+                    traj_occ_ious = traj_prop_matrix.T[obj_id]
+                    idx_miou = np.argmax(traj_occ_ious)
+                    if traj_occ_ious[idx_miou] >= 0.2:
+                        if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx:
+                            trajectories[idx_miou].append(obj_dict)
+                    else:
+                        trajectories.append([obj_dict])
 
         return trajectories
 
@@ -169,13 +167,9 @@ class Tracker:
             scan_idx = traj[k]['scan_idx']
             if 'gt' in traj_id:
                 cad2scan = traj[k]['obj']['aligned2scan']
-                #cad2scan[:3,:3] /= get_scale(traj[k]['obj']['aligned2scan'][:3, :3])
-                aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ cad2scan  # CAD2CAM
-                #aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['aligned2scan'] # CAD2CAM
-                #aligned2cam_free = traj[k]['obj']['aligned2scan'] # CAD2CAM
+                aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ cad2scan  # Scan2cam # CAD2CAM
             else:
                 aligned2cam_free = seq_data[scan_idx]['cam_grid2cam_free'] @ traj[k]['obj']['pred_aligned2scan']
-                #aligned2cam_free =  traj[k]['obj']['pred_aligned2scan']
 
             aligned2world_free = seq_data[scan_idx]['cam_free2world_free'] @ aligned2cam_free # CAD2WORLD
             cam_t = aligned2cam_free[:3, 3]
@@ -227,15 +221,15 @@ class Tracker:
 
     def eval_mota(self, pred_table, mov_obj_traj_table):
         # compute mota based on l2_th
-        l2_th = 0.35
+        l2_th = 0.25
 
         mh = mm.metrics.create()
 
         #for pred_traj_id in pred_table['traj_id'].drop_duplicates():
         acc = mm.MOTAccumulator(auto_id=True)
         for scan_idx in range(self.seq_len):
-            gt_cams = np.array(
-                mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['cam_x', 'cam_y', 'cam_z']]) # CAD2WORLD TRANSLATION
+            #gt_cams = np.array(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['cam_x', 'cam_y', 'cam_z']]) # CAD2WORLD TRANSLATION
+            gt_cams = np.array(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['world_x', 'world_y', 'world_z']]) # CAD2WORLD TRANSLATION
             # get gt position in camera frame
             gt_objects = mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'].tolist()
             #gt_idx = int(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'])
@@ -247,7 +241,8 @@ class Tracker:
             dist_matrix = np.nan * np.ones((len(gt_objects), len(hypo_table)))
             # print(dist_matrix.shape)
             for j, hypo in enumerate(hypo_table.iterrows()):
-                hypo_cam = np.array(hypo[1][['cam_x', 'cam_y', 'cam_z']]) #CAD2WORLD TRANSLATION
+                #hypo_cam = np.array(hypo[1][['cam_x', 'cam_y', 'cam_z']]) #CAD2WORLD TRANSLATION
+                hypo_cam = np.array(hypo[1][['world_x', 'world_y', 'world_z']]) #CAD2WORLD TRANSLATION
                 # get hypo position in camera frame
                 #hypo_id = int(hypo[1]['traj_id'].split('_')[-1])  # format was pred_X
                 hypo_id = hypo[1]['obj_idx']
@@ -302,52 +297,63 @@ class Tracker:
         vg[tuple(indices.T)] = True
         return vg
 
+    def get_iou_box(self, boxA, boxB):
+        """ Compute IoU of two bounding boxes.
+        """
+        # determine the (x, y, z)-coordinates of the intersection rectangle
+        minx_overlap = max(boxA[0], boxB[0])
+        miny_overlap = max(boxA[1], boxB[1])
+        minz_overlap = max(boxA[2], boxB[2])
 
-'''
-    def eval_mota(self, pred_table, mov_obj_traj_table):
-        # compute mota based on l2_th
-        l2_th = 0.25
+        maxx_overlap = min(boxA[3], boxB[3])
+        maxy_overlap = min(boxA[4], boxB[4])
+        maxz_overlap = min(boxA[5], boxB[5])
 
-        mh = mm.metrics.create()
-        all_traj_summary = pd.DataFrame()
+        # compute the area of intersection rectangle
+        interArea = max(0, maxx_overlap - minx_overlap)*max(0, maxy_overlap - miny_overlap)*max(0, maxz_overlap - minz_overlap)
 
-        for pred_traj_id in pred_table['traj_id'].drop_duplicates():
-            acc = mm.MOTAccumulator(auto_id=True)
-            for scan_idx in mov_obj_traj_table['scan_idx']:
-                gt_cams = np.array(
-                    mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['cam_x', 'cam_y', 'cam_z']]) # CAD2WORLD TRANSLATION
-                # get gt position in camera frame
-                gt_objects = mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'].tolist()
-                #gt_idx = int(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'])
+        # compute the area of both the prediction and ground-truth
+        # rectangles
+        boxAArea = (boxA[3] - boxA[0])*(boxA[4] - boxA[1])*(boxA[5] - boxA[2])
+        boxBArea = (boxB[3] - boxB[0])*(boxB[4] - boxB[1])*(boxB[5] - boxB[2])
 
-                #gt_objects = [gt_idx]
+        # compute the intersection over union by taking the intersection
+        # area and dividing it by the sum of prediction + ground-truth
+        # areas - the interesection area
+        iou = interArea / float(boxAArea + boxBArea - interArea)
 
-                hypo_table = pred_table[(pred_table['scan_idx'] == scan_idx) & (pred_table['traj_id'] == pred_traj_id)]
-                pred_objects = []
-                dist_matrix = np.nan * np.ones((len(gt_objects), len(hypo_table)))
-                # print(dist_matrix.shape)
-                for j, hypo in enumerate(hypo_table.iterrows()):
-                    hypo_cam = np.array(hypo[1][['cam_x', 'cam_y', 'cam_z']]) #CAD2WORLD TRANSLATION
-                    # get hypo position in camera frame
-                    hypo_id = int(hypo[1]['traj_id'].split('_')[-1])  # format was pred_X
-                    pred_objects.append(hypo_id)
-                    for i, gt_obj in enumerate(gt_objects):
-                        gt_cam = gt_cams[i,:]
-                        # SINGLE GT OBJECT THOUGH
-                        value_dist = mm.distances.norm2squared_matrix(gt_cam * self.quantization_size, hypo_cam * self.quantization_size)#, max_d2=l2_th)
-                        dist_matrix[i][j] = mm.distances.norm2squared_matrix(gt_cam * self.quantization_size, hypo_cam * self.quantization_size, max_d2=l2_th)
-                        # l2 distance between gt object and hypothesis, capped to l2_th
+        # return the intersection over union value
+        return iou
 
-                acc.update(
-                    gt_objects,  # Ground truth objects in this frame
-                    pred_objects,  # Detector hypotheses in this frame
-                    dist_matrix
-                )
+    def box_to_world(self, box, shift):
+        """ Reset initial pc shift
+        """
 
-            summary = mh.compute(acc, metrics=['num_frames', 'mota', 'motp', 'num_matches', 'num_misses',
-                                               'num_false_positives'], name='acc')
-            summary['traj_id'] = pred_traj_id
-            all_traj_summary = pd.concat([all_traj_summary, summary])
-        return all_traj_summary
+        copy_box = box.copy()
+        copy_box[0] += shift[0] #x
+        copy_box[3] += shift[0]
+        copy_box[1] += shift[1] #y
+        copy_box[4] += shift[1]
+        copy_box[2] += shift[2] #z
+        copy_box[5] += shift[2]
 
-'''
+        return copy_box
+
+    '''
+  TRAJECTORY WISE MATCHING
+  for traj_id, traj_ious in enumerate(iou_prop_matrix):
+      idx_miou = np.argmax(traj_ious)
+      obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx, 'shift':shift}
+
+      #todo check if scan id exist in trajectory
+      if traj_ious[idx_miou] >= self.iou_thres:
+          trajectories[traj_id].append(obj_dict)
+      else:
+          # If IoU less than 0.3 check overlap occ
+          traj_occ_ious = traj_prop_matrix[traj_id]
+          idx_miou = np.argmax(traj_occ_ious)
+          if traj_occ_ious[idx_miou] >= 0.0:
+              trajectories[traj_id].append(obj_dict)
+          else:
+              trajectories.append([obj_dict])
+  '''

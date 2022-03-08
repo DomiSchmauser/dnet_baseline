@@ -107,13 +107,13 @@ class BNocDec2_ume(nn.Module):
                 # Pose predictions
                 gt_scaled_noc2scan_R = (noc2scan[:3, :3] / get_scale(noc2scan[:3, :3])).to(
                     torch.float32)
-                relative_compl_loss_R = pred_noc2scan_R @ torch.inverse(gt_scaled_noc2scan_R)
+                relative_compl_loss_R = pred_noc2scan_R @ torch.inverse(gt_scaled_noc2scan_R) # Compare unscaled rotations
                 delta_rot = rotation_matrix_to_angle_axis(relative_compl_loss_R.unsqueeze(0))[0]
                 rot_error = torch.abs(delta_rot) * 180 / np.pi
                 if not torch.isnan(rot_error).any():
                     rot_errors.append(torch.unsqueeze(rot_error.detach().cpu(), dim=0))
 
-                transl_error = torch.abs(pred_noc2scan_t.detach().cpu() - noc2scan[:3, 3].detach().cpu())
+                transl_error = torch.abs(pred_noc2scan_t.detach().cpu() - noc2scan[:3, 3].detach().cpu()) # compare translation in coord space
                 if not torch.isnan(transl_error).any():
                     transl_errors.append(torch.unsqueeze(transl_error, dim=0))
 

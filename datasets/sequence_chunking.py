@@ -261,6 +261,7 @@ def batch_collate_infer(batch):
     bscan_obj = []
     bscan_info = []
     bcam_info = []
+    bshift_info = []
 
     for idx, img in enumerate(batch):
 
@@ -275,6 +276,7 @@ def batch_collate_infer(batch):
         feats.append(img['sparse_feats'])
         bscan_info.append(img['rgb_path'])
         bcam_info.append(img['campose'])
+        bshift_info.append(img['pc_offset'])
 
         # Object level
         reg_values = np.zeros([1, 7, img['dense_grid'].shape[0], img['dense_grid'].shape[1], img['dense_grid'].shape[2]])
@@ -360,7 +362,7 @@ def batch_collate_infer(batch):
                                         bs_reg_coords.to(device))
 
 
-    return dense_features, sparse_features, (sparse_reg_tensor, sparse_box_features, sparse_obj_features, bscan_inst_mask, bscan_nocs_mask, bscan_obj, bscan_info, bcam_info)
+    return dense_features, sparse_features, (sparse_reg_tensor, sparse_box_features, sparse_obj_features, bscan_inst_mask, bscan_nocs_mask, bscan_obj, bscan_info, bcam_info, bshift_info)
 
 
 
