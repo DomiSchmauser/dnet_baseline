@@ -14,7 +14,8 @@ class Tracker:
         self.seq_len = 25
         self.quantization_size = 0.04
         self.similar_value = 0.3
-        self.iou_thres = 0.3
+        self.iou_thres = 0.2
+        self.l2_thres = 0.35
         self.dist_thres = 100
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
@@ -242,39 +243,30 @@ class Tracker:
         return traj_tables
 
     def eval_mota(self, pred_table, mov_obj_traj_table):
-        # compute mota based on l2_th
-        l2_th = 0.4
+        l2_th = self.l2_thres
 
         mh = mm.metrics.create()
 
-        #for pred_traj_id in pred_table['traj_id'].drop_duplicates():
         acc = mm.MOTAccumulator(auto_id=True)
         for scan_idx in range(self.seq_len):
             #gt_cams = np.array(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['cam_x', 'cam_y', 'cam_z']]) # CAD2WORLD TRANSLATION
             gt_cams = np.array(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx][['world_x', 'world_y', 'world_z']]) # CAD2WORLD TRANSLATION
             # get gt position in camera frame
             gt_objects = mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'].tolist()
-            #gt_idx = int(mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'])
 
-            #gt_objects = [gt_idx]
-
-            hypo_table = pred_table[(pred_table['scan_idx'] == scan_idx)]
+            hypo_table = pred_table[(pred_table['scan_idx'] == scan_idx)] #todo verify
             pred_objects = []
             dist_matrix = np.nan * np.ones((len(gt_objects), len(hypo_table)))
-            # print(dist_matrix.shape)
             for j, hypo in enumerate(hypo_table.iterrows()):
                 #hypo_cam = np.array(hypo[1][['cam_x', 'cam_y', 'cam_z']]) #CAD2WORLD TRANSLATION
                 hypo_cam = np.array(hypo[1][['world_x', 'world_y', 'world_z']]) #CAD2WORLD TRANSLATION
                 # get hypo position in camera frame
-                #hypo_id = int(hypo[1]['traj_id'].split('_')[-1])  # format was pred_X
                 hypo_id = hypo[1]['obj_idx']
                 pred_objects.append(hypo_id)
                 for i, gt_obj in enumerate(gt_objects):
                     gt_cam = gt_cams[i,:]
-                    # SINGLE GT OBJECT THOUGH
-                    #value_dist = mm.distances.norm2squared_matrix(gt_cam * self.quantization_size, hypo_cam * self.quantization_size)#, max_d2=l2_th)
-                    dist_matrix[i][j] = mm.distances.norm2squared_matrix(gt_cam, hypo_cam, max_d2=l2_th)
-                    # l2 distance between gt object and hypothesis, capped to l2_th
+                    dist_matrix[i][j] = mm.distances.norm2squared_matrix(gt_cam, hypo_cam, max_d2=l2_th) # l2 distance between gt object and hypothesis, capped to l2_th
+
 
             acc.update(
                 gt_objects,  # Ground truth objects in this frame
@@ -282,10 +274,9 @@ class Tracker:
                 dist_matrix
             )
 
-        all_traj_summary = mh.compute(acc, metrics=['num_frames', 'mota', 'motp', 'num_matches', 'num_misses',
-                                           'num_false_positives'], name='acc')
-            #summary['traj_id'] = pred_traj_id
-            #all_traj_summary = pd.concat([all_traj_summary, summary])
+        all_traj_summary = mh.compute(acc, metrics=['num_frames', 'mota', 'precision', 'recall', 'num_objects', 'num_matches', 'num_misses',
+                                           'num_false_positives', 'num_switches'], name='acc')
+
         return all_traj_summary
 
     def dot(self, transform, points):

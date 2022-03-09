@@ -32,8 +32,8 @@ from model_cfg import init_cfg
 from utils.train_utils import sec_to_hm_str, loss_to_logging
 from utils.net_utils import vg_crop
 from utils.scan_merge import merge2seq
-from datasets.sequence_chunking import batch_collate, batch_collate_infer, batch_collate_cpu
-from evaluate import evaluate
+from datasets.sequence_chunking import batch_collate, batch_collate_infer
+from evaluate import evaluate, get_mota
 
 # Model import
 from models.BCompletionDec2 import BCompletionDec2
@@ -123,7 +123,7 @@ class Trainer:
             shuffle=True,
             num_workers=self.opt.num_workers,
             collate_fn=batch_collate,
-            pin_memory=False, #Todo set to true for speedup
+            pin_memory=False,
             drop_last=True)
 
         val_dataset = self.dataset(
@@ -293,15 +293,6 @@ class Trainer:
 
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
-                '''
-                if self.no_crash_mode:
-                    try:
-                        outputs, bscan_info = self.infer_step(inputs)
-                    except:
-                        traceback.print_exc()
-                        continue
-                else:
-                '''
 
                 if vis and int(batch_idx + 1) % 25 == 0:
                     dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
@@ -365,16 +356,33 @@ class Trainer:
 
                 if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only:
                     mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
+                    Prec = mota_df.loc[:, 'precision'].mean(axis=0) #How many of found are correct
+                    Rec = mota_df.loc[:, 'recall'].mean(axis=0) #How many predictions found
                     num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
                     num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
-                    print('Current avg MOTA :', mota_score, ' Current sum Misses :', num_misses,
-                          ' Current sum False Positives :', num_false_positives)
+                    id_switches = mota_df.loc[:, 'num_switches'].sum(axis=0)
+                    num_objects_gt = mota_df.loc[:, 'num_objects'].sum(axis=0)
+                    mota_accumulated = get_mota(num_objects_gt, num_misses, num_false_positives, id_switches)
+                    print('Accumulated MOTA:', mota_accumulated, ' Averaged MOTA:', mota_score,
+                          ' Precision:', Prec,
+                          ' Recall:', Rec,
+                          ' Current sum Misses:', num_misses,
+                          ' Current sum False Positives:', num_false_positives)
 
         print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
+        Prec = mota_df.loc[:, 'precision'].mean(axis=0)
+        Rec = mota_df.loc[:, 'recall'].mean(axis=0)
         num_misses = mota_df.loc[:, 'num_misses'].sum(axis=0)
         num_false_positives = mota_df.loc[:, 'num_false_positives'].sum(axis=0)
-        print('MOTA :', mota_score, ' Misses :', num_misses, ' False Positives :', num_false_positives)
+        id_switches = mota_df.loc[:, 'num_switches'].sum(axis=0)
+        num_objects_gt = mota_df.loc[:, 'num_objects'].sum(axis=0)
+        mota_accumulated = get_mota(num_objects_gt, num_misses, num_false_positives, id_switches)
+        print('Accumulated MOTA:', mota_accumulated, ' Averaged MOTA:', mota_score,
+              ' Precision:', Prec,
+              ' Recall:', Rec,
+              ' Current sum Misses:', num_misses,
+              ' Current sum False Positives:', num_false_positives)
 
         if store_results:
             # store evaluations

@@ -27,6 +27,13 @@ from utils.eval_utils import mask_iou, l1_acc, mpl_plot
 
 log = logging.getLogger(__name__)
 
+def get_mota(num_gt_objs, num_misses, num_fps, num_switches):
+    '''
+    Calculates a mota score over all frames seen
+    '''
+    mota = 1.0 - (float(num_misses + num_fps + num_switches) / float(num_gt_objs))
+    return mota
+
 
 def evaluate(outputs, inputs, losses=None, analyses=None):
 
