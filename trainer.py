@@ -32,7 +32,7 @@ from model_cfg import init_cfg
 from utils.train_utils import sec_to_hm_str, loss_to_logging
 from utils.net_utils import vg_crop
 from utils.scan_merge import merge2seq
-from datasets.sequence_chunking import batch_collate, batch_collate_infer
+from datasets.sequence_chunking import batch_collate, batch_collate_infer, batch_collate_cpu
 from evaluate import evaluate, get_mota
 
 # Model import
@@ -117,14 +117,25 @@ class Trainer:
 
         train_dataset = self.dataset(base_dir=DATA_DIR, split='train', overfit=self.overfit)
 
-        self.train_loader = DataLoader(
-            train_dataset,
-            self.opt.batch_size,
-            shuffle=True,
-            num_workers=self.opt.num_workers,
-            collate_fn=batch_collate,
-            pin_memory=False,
-            drop_last=True)
+        if self.opt.num_workers > 0:
+            self.train_loader = DataLoader(
+                train_dataset,
+                self.opt.batch_size,
+                shuffle=True,
+                num_workers=self.opt.num_workers,
+                collate_fn=batch_collate_cpu,
+                pin_memory=True,
+                drop_last=True)
+        else:
+            self.train_loader = DataLoader(
+                train_dataset,
+                self.opt.batch_size,
+                shuffle=True,
+                num_workers=self.opt.num_workers,
+                collate_fn=batch_collate,
+                pin_memory=False,
+                drop_last=True)
+
 
         val_dataset = self.dataset(
             base_dir=DATA_DIR,
@@ -134,7 +145,7 @@ class Trainer:
             val_dataset,
             batch_size=self.opt.batch_size,
             shuffle=False,
-            num_workers=self.opt.num_workers,
+            num_workers=0,
             collate_fn=batch_collate_infer,
             pin_memory=False,
             drop_last=False)
@@ -143,7 +154,7 @@ class Trainer:
             val_dataset,
             batch_size=1,
             shuffle=False,
-            num_workers=self.opt.num_workers,
+            num_workers=0,
             collate_fn=batch_collate_infer,
             pin_memory=False,
             drop_last=False)
@@ -294,7 +305,7 @@ class Trainer:
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
 
-                if vis and int(batch_idx + 1) % 25 == 0:
+                if vis and int(batch_idx + 1) % 10 == 0:
                     dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
                     boxes = outputs['rpn']['bbbox_lvl0'][0]
                     for box in boxes:
@@ -327,6 +338,7 @@ class Trainer:
                             grid = torch.squeeze(grid).detach().cpu().numpy()
                             occ_grids[seq_name][scan_idx] = grid
 
+                # Evaluate Tracking per Sequence for fixed sequence lenght == 25
                 if int(batch_idx + 1) % 25 == 0:
                     if pose_only:
                         print('Rotation error :', torch.median(torch.cat(rotation_errors, dim=0), dim=0).values)
@@ -340,10 +352,11 @@ class Trainer:
                     collection_eval_df.sort_values(by='seq_name')
                     collection_eval_df.sort_values(by='scan_idx')
                     sequences = collection_gt_eval_df['seq_name'].unique().tolist()
+                    assert len(sequences) == 1
                     for seq_idx, seq in enumerate(sequences):
                         gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
                         pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
-                        pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq]) # max IoU nocs with first object change to prior
+                        pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
                         gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
                         pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
                         seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
@@ -354,6 +367,7 @@ class Trainer:
                     collection_gt_eval_df = pd.DataFrame()
                     occ_grids = dict()
 
+                # Logging
                 if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only:
                     mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
                     Prec = mota_df.loc[:, 'precision'].mean(axis=0) #How many of found are correct
@@ -369,6 +383,7 @@ class Trainer:
                           ' Current sum Misses:', num_misses,
                           ' Current sum False Positives:', num_false_positives)
 
+        # Final Logging
         print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
         Prec = mota_df.loc[:, 'precision'].mean(axis=0)
@@ -384,6 +399,7 @@ class Trainer:
               ' Current sum Misses:', num_misses,
               ' Current sum False Positives:', num_false_positives)
 
+        # Results to CSV
         if store_results:
             # store evaluations
             eval_dir = Path(self.experiment_dir, 'evaluations', 'inference')
@@ -475,17 +491,44 @@ class Trainer:
         losses = dict()
         analyses = dict()
 
-        # Unpack data
+        # Unpack data everything
         dense_features, sparse_features, rpn_features = inputs
 
-        rpn_gt = {}
-        rpn_gt['breg_sparse'] = rpn_features[0]
-        rpn_gt['scan_shape'] = dense_features.shape[2:]
-        rpn_gt['bboxes'] = rpn_features[1]  # list(N boxes x 6)
-        rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
-        rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
-        rpn_gt['bscan_nocs_mask'] = rpn_features[4] # list( 3 x X x Y x Z)
-        bscan_obj = rpn_features[5]
+        if self.opt.num_workers > 0:
+
+            # Move to GPU
+            dense_features = dense_features.to(self.device)
+            sparse_features = ME.SparseTensor(sparse_features[0].to(self.device), # 0 are features
+                                              ME.utils.batched_coordinates(sparse_features[1]).to(self.device)) # 1 are coords
+            #sparse_features = sparse_features.to(self.device)
+
+            rpn_gt = {}
+            rpn_gt['breg_sparse'] = ME.SparseTensor(rpn_features[0][0].to(self.device),
+                                                    ME.utils.batched_coordinates(rpn_features[0][1]).to(self.device))
+            rpn_gt['scan_shape'] = dense_features.shape[2:]
+            boxes_gpu = []
+            inst_mask_gpu = []
+            nocs_mask_gpu = []
+            for B in range(len(rpn_features[1])):
+                boxes_gpu.append(rpn_features[1][B].to(self.device))
+                inst_mask_gpu.append(rpn_features[3][B].to(self.device))
+                nocs_mask_gpu.append(rpn_features[4][B].to(self.device))
+
+            rpn_gt['bboxes'] = boxes_gpu  # list(N boxes x 6)
+            rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
+            rpn_gt['bscan_inst_mask'] = inst_mask_gpu  # list( 1 x X x Y x Z)
+            rpn_gt['bscan_nocs_mask'] = nocs_mask_gpu # list( 3 x X x Y x Z)
+            bscan_obj = rpn_features[5]
+
+        else:
+            rpn_gt = {}
+            rpn_gt['breg_sparse'] = rpn_features[0]
+            rpn_gt['scan_shape'] = dense_features.shape[2:]
+            rpn_gt['bboxes'] = rpn_features[1]  # list(N boxes x 6)
+            rpn_gt['bobj_idxs'] = rpn_features[2]  # list(list ids)
+            rpn_gt['bscan_inst_mask'] = rpn_features[3]  # list( 1 x X x Y x Z)
+            rpn_gt['bscan_nocs_mask'] = rpn_features[4]  # list( 3 x X x Y x Z)
+            bscan_obj = rpn_features[5]
 
         # Sparse Pipeline ---------------------------------------------------------------------------------------------
         s_e2 = self.sparse_backbone.training_step(sparse_features)

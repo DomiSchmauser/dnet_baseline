@@ -1,21 +1,18 @@
 import numpy as np
-import json
-from trimesh.transformations import translation_matrix, rotation_matrix, scale_and_translate, scale_matrix, reflection_matrix
 import motmetrics as mm
 import pandas as pd
 from dvis import dvis
 
 from utils.net_utils import vg_crop, get_scale
 
-
 class Tracker:
 
     def __init__(self):
         self.seq_len = 25
         self.quantization_size = 0.04
-        self.similar_value = 0.3
-        self.iou_thres = 0.2
-        self.l2_thres = 0.35
+        self.similar_value = 0.1
+        self.iou_thres = 0.3
+        self.l2_thres = 0.3
         self.dist_thres = 100
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
@@ -64,10 +61,10 @@ class Tracker:
                 initial_gt_ids = []
                 for obj in pred_scan_dct.values():
                     has_similar = False
-                    for pred_traj in pred_trajectories: # Cad to scan
-                        if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < (self.similar_value / self.quantization_size): # 0.6m / 0.03 = quantization size?
+                    for pred_traj in pred_trajectories: #todo checks if any close object exists -> some kind of NMS
+                        if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < (self.similar_value / self.quantization_size): #todo check this
                             has_similar = True
-                    if not has_similar: # not an object which is close #todo add check if gt id already in object
+                    if not has_similar: # not an object which is close #todo added check if gt id already in object -> maybe better
                         if obj['gt_target'] not in initial_gt_ids:
                             pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx'], 'shift':shift_coords}])
                             initial_gt_ids.append(obj['gt_target'])
@@ -81,11 +78,13 @@ class Tracker:
                                 del pred_trajectories[drop_idx]
                                 pred_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx'], 'shift': shift_coords}])
 
+
                 for gt_obj in gt_scan_dct.values():
                     gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}])
             else:
                 # Match trajectories to initial trajectory
                 pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, occ_grid=occ_grid, traj_crit='with_first', shift=shift_coords, scan_idx=scan_idx)
+                # GT Matching
                 for gt_obj in gt_scan_dct.values():
                     matched = False
                     for gt_traj in gt_trajectories:
@@ -93,9 +92,8 @@ class Tracker:
                             gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']})  # build list per trajectory
                             matched = True
                             break
-
                     if not matched:
-                        gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}]) # start new trajectory #todo check if works
+                        gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}]) # start new trajectory
 
 
 
@@ -110,58 +108,66 @@ class Tracker:
         target_list = []
         obj_idx = 0
         for _, obj_j in dscan_j.items():
-            if traj_crit == 'with_first':
+            # Voxel occupancy comparison
+            surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
+            #dvis(surf_occ, fmt='voxels')
+            #dvis(compl, fmt='voxels')
+            obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
+            obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
+
+            for traj_idx, traj in enumerate(trajectories):
+                start_obj = traj[0]['obj']
+                prior_obj = traj[-1]['obj']
+
                 # Voxel occupancy comparison
-                surf_occ = (vg_crop((occ_grid > 0), obj_j['bbox']) & (obj_j['occ'] > 0))
+                surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
+                            start_obj['occ'] > 0))
                 #dvis(surf_occ, fmt='voxels')
-                #dvis(compl, fmt='voxels')
-                obj_j_occ_in_noc = obj_j['noc'][:, surf_occ].T
-                obj_j_noc_vg = self.voxelize_unit_pc(obj_j_occ_in_noc)  # voxelized pc
+                start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
+                start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
 
-                for traj_idx, traj in enumerate(trajectories):
-                    start_obj = traj[0]['obj']
-                    prior_obj = traj[-1]['obj']
+                # Voxel IoU
+                iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
+                traj_prop_matrix[traj_idx, obj_idx] = iou3d
 
-                    # Voxel occupancy comparison
-                    surf_occ = (vg_crop((occ_grid > 0), start_obj['bbox']) & (
-                                start_obj['occ'] > 0))
-                    #dvis(surf_occ, fmt='voxels')
-                    start_obj_j_occ_in_noc = start_obj['noc'][:, surf_occ].T
-                    start_obj_noc_vg = self.voxelize_unit_pc(start_obj_j_occ_in_noc)
+                # Box IoU -> first shift to reset scan differences
+                prior_box = self.box_to_world(prior_obj['bbox'], traj[-1]['shift'])
+                current_box = self.box_to_world(obj_j['bbox'], shift)
+                box_iou = self.get_iou_box(current_box, prior_box)
+                iou_prop_matrix[traj_idx, obj_idx] = box_iou
 
-                    # Voxel IoU
-                    iou3d = float((obj_j_noc_vg & start_obj_noc_vg).sum()) / (obj_j_noc_vg | start_obj_noc_vg).sum()
-                    traj_prop_matrix[traj_idx, obj_idx] = iou3d
-
-                    # Box IoU -> first shift to reset scan differences
-                    prior_box = self.box_to_world(prior_obj['bbox'], traj[-1]['shift'])
-                    current_box = self.box_to_world(obj_j['bbox'], shift)
-                    box_iou = self.get_iou_box(current_box, prior_box)
-                    iou_prop_matrix[traj_idx, obj_idx] = box_iou
-
-                    # Get GT Target list
-                    if (obj_idx+1) == len(dscan_j.values()):
-                        target_list.append(prior_obj['gt_target'])
-
-            elif traj_crit == "alignment":
-                for traj_idx, traj in enumerate(trajectories):
-                    start_obj = traj[0]['obj']
-
+                # Alignment
+                if traj_crit == 'alignment':
                     prev_prop_matrix[traj_idx, obj_idx] = np.linalg.norm(
-                        (cam_grid2cam_free @ start_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j[
+                        (cam_grid2cam_free @ prior_obj['pred_aligned2scan'])[:3, 3] - (cam_grid2cam_free @ obj_j[
                             'pred_aligned2scan'])[:3, 3])  # compare cad to cam preds
+
+                # Get GT Target list #todo check all objects of last frame -> if gt id exist in previous trajectory dont start new one with this id
+                if (obj_idx+1) == len(dscan_j.values()):
+                    target_list.append(prior_obj['gt_target'])
+
 
             obj_idx += 1
 
         # Use max IoU current object with start object to build trajectory
         if traj_crit == 'alignment':
-            for traj_id, traj_dists in enumerate(prev_prop_matrix):
-                idx_miou = np.argmin(traj_dists) # minimal distance
-                obj_dict = {'obj': list(dscan_j.values())[idx_miou], 'scan_idx': scan_idx, 'shift':shift}
-                if traj_dists[idx_miou] < self.dist_thres:
-                    trajectories[traj_id].append(obj_dict)
+            for obj_id, obj_ious in enumerate(prev_prop_matrix.T): #after T rows objs clmns traj
+                idx_miou = np.argmin(obj_ious)
+                obj_dict = {'obj': list(dscan_j.values())[obj_id], 'scan_idx': scan_idx, 'shift': shift}
+                if obj_ious[idx_miou] < 0.3:
+                    if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx: # skip if object with same scan idx already matched
+                        trajectories[idx_miou].append(obj_dict)
                 else:
-                    trajectories.append([obj_dict])
+                    # If IoU less than 0.3 check overlap occ
+                    obj_ious = iou_prop_matrix.T[obj_id]
+                    idx_miou = np.argmax(obj_ious)
+                    if obj_ious[idx_miou] >= 0.3:
+                        if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx:
+                            trajectories[idx_miou].append(obj_dict)
+                    else:
+                        if obj_dict['obj']['gt_target'] not in target_list:
+                            trajectories.append([obj_dict])
+                            target_list.append(obj_dict['obj']['gt_target'])
         else:
             for obj_id, obj_ious in enumerate(iou_prop_matrix.T): #after T rows objs clmns traj
                 idx_miou = np.argmax(obj_ious)
@@ -173,10 +179,10 @@ class Tracker:
                     # If IoU less than 0.3 check overlap occ
                     traj_occ_ious = traj_prop_matrix.T[obj_id]
                     idx_miou = np.argmax(traj_occ_ious)
-                    if traj_occ_ious[idx_miou] >= 0.1:
+                    if traj_occ_ious[idx_miou] >= 0.25: #todo 0.3 good values
                         if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx:
                             trajectories[idx_miou].append(obj_dict)
-                    else: #todo added check for new trajectories if not in target list
+                    else:
                         if obj_dict['obj']['gt_target'] not in target_list:
                             trajectories.append([obj_dict])
                             target_list.append(obj_dict['obj']['gt_target'])
@@ -254,7 +260,7 @@ class Tracker:
             # get gt position in camera frame
             gt_objects = mov_obj_traj_table[mov_obj_traj_table['scan_idx'] == scan_idx]['obj_idx'].tolist()
 
-            hypo_table = pred_table[(pred_table['scan_idx'] == scan_idx)] #todo verify
+            hypo_table = pred_table[(pred_table['scan_idx'] == scan_idx)]
             pred_objects = []
             dist_matrix = np.nan * np.ones((len(gt_objects), len(hypo_table)))
             for j, hypo in enumerate(hypo_table.iterrows()):
@@ -278,31 +284,6 @@ class Tracker:
                                            'num_false_positives', 'num_switches'], name='acc')
 
         return all_traj_summary
-
-    def dot(self, transform, points):
-        if type(points) == list:
-            points = np.array(points)
-
-        if len(points.shape) == 1:
-            # single point
-            if transform.shape == (3, 3):
-                return transform @ points[:3]
-            else:
-                return (transform @ np.array([*points[:3], 1]))[:3]
-        elif len(points.shape) == 2:
-
-            if points.shape[0] not in [3, 4] and points.shape[1] in [3, 4]:
-                # needs to be transposed for dot product
-                points = points.T
-        else:
-            raise RuntimeError("Format of points not understood")
-        # points in format [3/4,n]
-        if transform.shape == (4, 4):
-            return (transform[:3, :3] @ points[:3]).T + transform[:3, 3]
-        elif transform.shape == (3, 3):
-            return (transform[:3, :3] @ points[:3]).T
-        else:
-            raise RuntimeError("Format of transform not understood")
 
     def voxelize_unit_pc(self, pc, shape=20):
         indices = (np.clip(pc, 0, 0.9999) * shape).astype(int)
@@ -341,8 +322,15 @@ class Tracker:
     def box_to_world(self, box, shift):
         """ Reset initial pc shift
         """
-
         copy_box = box.copy()
+        assert copy_box[0] < 192 and copy_box[1] < 192 and copy_box[2] < 96
+
+        # Clip boxes to scan size
+        copy_box[3] = np.clip(copy_box[3], 0, 191)
+        copy_box[4] = np.clip(copy_box[4], 0, 191)
+        copy_box[5] = np.clip(copy_box[5], 0, 95)
+
+        # Reset shift
         copy_box[0] += shift[0] #x
         copy_box[3] += shift[0]
         copy_box[1] += shift[1] #y

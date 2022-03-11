@@ -12,8 +12,6 @@ def batch_collate_cpu(batch):
     sparse_reg_features: list of per image features, len=25
     '''
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
     occ = []
     coords = []
     feats = []
@@ -47,24 +45,12 @@ def batch_collate_cpu(batch):
         obj_feats = {}
 
         for obj in img['obj_anns']:
-
             box_3d = obj['box_3d']
             obj_idx = obj['instance_id']
 
             # Dense reg values
             obj_scan_mask = scan_inst_mask == int(obj_idx)
-            '''
-            # dilate for sparse overlap
-            # TODO PRECALC FOR SPEEDUP
-            obj_scan_mask_torch = obj_scan_mask.cuda()
-            obj_scan_mask_torch2 = F.conv3d(
-                obj_scan_mask_torch.float().unsqueeze(0).unsqueeze(0), weight=torch.ones(1, 1, 9, 9, 9).cuda(),
-                padding=4
-            )[0][0]
-            obj_scan_mask = (obj_scan_mask_torch2 > 0).cpu().numpy()
-            '''
             obj_scan_mask = obj_scan_mask.numpy()
-
             obj_scan_coords = np.argwhere(obj_scan_mask)
 
             obj_center = (box_3d[3:6] + box_3d[:3]) / 2
@@ -72,7 +58,7 @@ def batch_collate_cpu(batch):
 
             delta_t = obj_center - obj_scan_coords
             delta_s = np.ones_like(delta_t) * obj_size
-            w = 1 - (np.linalg.norm(delta_t / delta_s, axis=1, ord=2) / np.sqrt(3)) # W represents distance to center for objectness supervision
+            w = 1 - (np.linalg.norm(delta_t / delta_s, axis=1, ord=2) / np.sqrt(3))  # W represents distance to center for objectness supervision
 
             reg_values[0, :, obj_scan_mask] = np.concatenate([np.expand_dims(w, 1), delta_t, delta_s], 1)
 
@@ -84,6 +70,7 @@ def batch_collate_cpu(batch):
             obj_feats[str(obj_idx)]['noc2scan'] = torch.from_numpy(obj['noc2scan'])
             obj_feats[str(obj_idx)]['rot_sym'] = obj['rot_sym']
             obj_feats[str(obj_idx)]['aligned2scan'] = torch.from_numpy(obj['cad2scan']).to(torch.float32)
+            obj_feats[str(obj_idx)]['aligned2noc'] = torch.from_numpy(obj['cad2noc']).to(torch.float32)
             obj_feats[str(obj_idx)]['box_3d'] = box_3d
 
             bboxes.append(np.expand_dims(box_3d, 0))
@@ -92,34 +79,29 @@ def batch_collate_cpu(batch):
         sparse_reg_features.append(reg_values)
         sparse_box_features.append(torch.from_numpy(np.concatenate(bboxes, axis=0)))
         sparse_obj_features.append(obj_idxs)
-        bscan_inst_mask.append(torch.unsqueeze(scan_inst_mask, dim=0)) # Move to cuda
-        bscan_nocs_mask.append(nocs_mask) # Move to cuda
+        bscan_inst_mask.append(torch.unsqueeze(scan_inst_mask, dim=0))  # Move to cuda
+        bscan_nocs_mask.append(nocs_mask)  # Move to cuda
         bscan_obj.append(obj_feats)
 
     # Batch sparse and dense features
-    bcoords = ME.utils.batched_coordinates(coords)
     bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
-    sparse_features = ME.SparseTensor(bfeats.to(device),
-                                      bcoords.to(device))  # Sparse tensor expects batched data
-    dense_features = torch.unsqueeze(torch.cat(occ, dim=0), dim=1).to(device).to(torch.float)
+    dense_features = torch.unsqueeze(torch.cat(occ, dim=0), dim=1).to(torch.float)
 
     # Batch sparse regression features
     sparse_reg_features = torch.from_numpy(np.concatenate(sparse_reg_features, axis=0))
-    s_coords, _ = sparse_features.decomposed_coordinates_and_features  # for decomposition of batched data
     s_feats = []
-    s_cpu_coords = []
-    for s_idx, s_coord in enumerate(s_coords):
-
+    for s_idx, s_coord in enumerate(coords):
         s_reg_feats = sparse_reg_features[s_idx, :, s_coord[:, 0].long(), s_coord[:, 1].long(), s_coord[:, 2].long()]
         s_feats.append(torch.transpose(s_reg_feats, 0, 1))
-        s_cpu_coords.append(s_coord.detach().cpu())
 
     bs_reg_feats = torch.cat(s_feats, dim=0)
-    bs_reg_coords = ME.utils.batched_coordinates(s_cpu_coords)
-    sparse_reg_tensor = ME.SparseTensor(bs_reg_feats.to(device),
-                                        bs_reg_coords.to(device))
+    sparse_reg_tensor = (bs_reg_feats, coords)
+    sparse_features = (bfeats, coords)
 
-    return dense_features, sparse_features, (sparse_reg_tensor, sparse_box_features, sparse_obj_features, bscan_inst_mask, bscan_nocs_mask, bscan_obj, bscan_info)
+    return dense_features, sparse_features, \
+           (sparse_reg_tensor, sparse_box_features, sparse_obj_features,
+            bscan_inst_mask, bscan_nocs_mask, bscan_obj,bscan_info)
+
 
 def batch_collate(batch):
     '''

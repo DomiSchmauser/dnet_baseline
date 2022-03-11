@@ -8,8 +8,8 @@ def init_cfg():
         'general': {
             'overfit': False,
             'quantization_size': 0.04,
-            'sparse_pretrain_epochs': 5,
-            'dense_pretrain_epochs': 5,
+            'sparse_pretrain_epochs': 1,
+            'dense_pretrain_epochs': 1,
         },
         'sparse_backbone': {
             'num_features': 30,
@@ -17,9 +17,9 @@ def init_cfg():
         'rpn': {
             'num_features': 30,
             'min_conf_train': 0.3,
-            'max_proposals_train': 6,
+            'max_proposals_train': 7,
             'min_conf_test': 0.6,
-            'max_proposals_test': 6,
+            'max_proposals_test': 7,
         },
         'dense_backbone': {
             'num_features': 30,

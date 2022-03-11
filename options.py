@@ -50,7 +50,7 @@ class Options:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=8)
+                                 default=4)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",
