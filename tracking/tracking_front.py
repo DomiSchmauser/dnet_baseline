@@ -12,7 +12,7 @@ class Tracker:
         self.quantization_size = 0.04
         self.similar_value = 0.1
         self.iou_thres = 0.3
-        self.l2_thres = 0.3
+        self.l2_thres = 0.4
         self.dist_thres = 100
 
     def analyse_trajectories(self, gt_seq_df, pred_seq_df, occ_grids):
@@ -179,7 +179,7 @@ class Tracker:
                     # If IoU less than 0.3 check overlap occ
                     traj_occ_ious = traj_prop_matrix.T[obj_id]
                     idx_miou = np.argmax(traj_occ_ious)
-                    if traj_occ_ious[idx_miou] >= 0.25: #todo 0.3 good values
+                    if traj_occ_ious[idx_miou] >= 0.2: #todo 0.3 good values
                         if trajectories[idx_miou][-1]['obj']['scan_idx'] != scan_idx:
                             trajectories[idx_miou].append(obj_dict)
                     else:
