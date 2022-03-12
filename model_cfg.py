@@ -8,8 +8,8 @@ def init_cfg():
         'general': {
             'overfit': False,
             'quantization_size': 0.04,
-            'sparse_pretrain_epochs': 1,
-            'dense_pretrain_epochs': 1,
+            'sparse_pretrain_epochs': 5,
+            'dense_pretrain_epochs': 5,
         },
         'sparse_backbone': {
             'num_features': 30,

@@ -34,15 +34,15 @@ class Options:
         self.parser.add_argument("--learning_rate_rpn",
                                  type=float,
                                  help="learning rate rpn",
-                                 default=1e-3)
+                                 default=3e-4)
         self.parser.add_argument("--learning_rate_general",
                                  type=float,
                                  help="learning rate general",
-                                 default=1e-3)
+                                 default=3e-4)
         self.parser.add_argument("--weight_decay", # L2 Regularization
                                  type=float,
                                  help="weight decay",
-                                 default=1e-4) # 1e-4
+                                 default=1e-5) # 1e-4
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
@@ -50,7 +50,7 @@ class Options:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=4)
+                                 default=8)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",
@@ -61,7 +61,7 @@ class Options:
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",
-                                 default=15)
+                                 default=6)
 
         self.parser.add_argument("--start_saving",
                                  type=int,
