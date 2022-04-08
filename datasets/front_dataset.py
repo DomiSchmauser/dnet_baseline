@@ -49,7 +49,7 @@ class Front_dataset(Dataset):
         self.padded_size = [192, 192, 96] # x y z
         self.quantization_size = 0.04
         self.debugging_mode = False
-        self.cls_names = {1:'chair', 2:'table', 3:'sofa', 4:'bed'}
+        self.cls_names = {1:'chair', 2:'table', 3:'sofa', 4:'bed', 5:'tv stand', 6:'wine cooler', 7:'nightstand'}
 
     def __len__(self):
         return len(self.imgs)
@@ -131,7 +131,7 @@ class Front_dataset(Dataset):
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
                         #voxel_path = os.path.join(CONF.PATH.BASE, 'binvox', jid, 'model_64.binvox')
-                        voxel_path = os.path.join('/home/schmauser/bin_vox64', jid, 'model_64.binvox')
+                        voxel_path = os.path.join('/home/schmauser/bin_vox64', jid, 'model_64.binvox') #server
                         #print(voxel_path)
 
                         # Cad2World transformation in Blender Space

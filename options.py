@@ -34,15 +34,15 @@ class Options:
         self.parser.add_argument("--learning_rate_rpn",
                                  type=float,
                                  help="learning rate rpn",
-                                 default=3e-4)
+                                 default=1e-3)
         self.parser.add_argument("--learning_rate_general",
                                  type=float,
                                  help="learning rate general",
-                                 default=3e-4)
+                                 default=1e-3)
         self.parser.add_argument("--weight_decay", # L2 Regularization
                                  type=float,
                                  help="weight decay",
-                                 default=1e-5) # 1e-4
+                                 default=1e-4) # 1e-4
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
@@ -61,7 +61,7 @@ class Options:
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",
-                                 default=6)
+                                 default=10)
 
         self.parser.add_argument("--start_saving",
                                  type=int,
@@ -86,7 +86,7 @@ class Options:
         self.parser.add_argument("--resume",
                                  type=bool,
                                  help="resume training",
-                                 default=True)
+                                 default=False)
 
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
