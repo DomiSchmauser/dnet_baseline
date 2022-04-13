@@ -50,7 +50,7 @@ class Options:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=8)
+                                 default=6)
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",
@@ -61,7 +61,7 @@ class Options:
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",
-                                 default=10)
+                                 default=8)
 
         self.parser.add_argument("--start_saving",
                                  type=int,

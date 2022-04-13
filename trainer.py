@@ -213,8 +213,7 @@ class Trainer:
                 print('Full pipeline training ...')
 
             self.run_epoch(sparse_pretrain=sparse_pretrain, dense_pretrain=dense_pretrain)
-            if (self.epoch+1) % self.opt.save_frequency == 0 \
-                    and self.opt.save_model and (self.epoch+1) >= self.opt.start_saving and not sparse_pretrain:
+            if (self.epoch+1) % self.opt.save_frequency == 0:
                 self.save_model(is_val=False)
 
     def val(self, sparse_pretrain=False, dense_pretrain=False):
