@@ -58,7 +58,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
     for B in range(len(rpn_gt['bboxes'])):
 
         # Tracking infos
-        seq_pattern = "val/(.*?)/coco_data"
+        seq_pattern = "test/(.*?)/coco_data"
         scan_pattern = "rgb_(.*?).png"
         seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
         scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
@@ -91,7 +91,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
         bbox_lvl0, gt_target, rpn_conf = bbbox_lvl0[B], bgt_target[B], brpn_conf[B]
 
         # Tracking infos
-        seq_pattern =  "val/(.*?)/coco_data"
+        seq_pattern =  "test/(.*?)/coco_data"
         scan_pattern = "rgb_(.*?).png"
         seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
         scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))

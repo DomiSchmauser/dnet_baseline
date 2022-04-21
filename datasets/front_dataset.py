@@ -130,8 +130,8 @@ class Front_dataset(Dataset):
 
                         instance_id = int(anno['id']) + 2 # shift by 2 to avoid confusion 0 and 1 which represent occupancies
                         jid = anno['jid']
-                        #voxel_path = os.path.join(CONF.PATH.BASE, 'binvox', jid, 'model_64.binvox')
-                        voxel_path = os.path.join('/home/schmauser/bin_vox64', jid, 'model_64.binvox') #server
+                        voxel_path = os.path.join(CONF.PATH.BASE, 'binvox', jid, 'model_64.binvox')
+                        #voxel_path = os.path.join('/home/schmauser/bin_vox64', jid, 'model_64.binvox') #server
                         #print(voxel_path)
 
                         # Cad2World transformation in Blender Space

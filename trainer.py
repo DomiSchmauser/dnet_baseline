@@ -150,8 +150,12 @@ class Trainer:
             pin_memory=False,
             drop_last=False)
 
+        test_dataset = self.dataset(
+            base_dir=DATA_DIR,
+            split='test')
+
         self.infer_loader = DataLoader(
-            val_dataset,
+            test_dataset,
             batch_size=1,
             shuffle=False,
             num_workers=0,
@@ -324,7 +328,7 @@ class Trainer:
 
                     # Scan level GT occupancy grids
                     for B, grid in enumerate(inputs[0]):
-                        seq_pattern = "val/(.*?)/coco_data"
+                        seq_pattern = "test/(.*?)/coco_data"
                         scan_pattern = "rgb_(.*?).png"
                         seq_name = re.search(seq_pattern, bscan_info[B]).group(1)
                         scan_idx = int(re.search(scan_pattern, bscan_info[B]).group(1))
