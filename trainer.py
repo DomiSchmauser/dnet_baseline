@@ -278,7 +278,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=25, get_pose_error=False, pose_only=False):
+    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=False, resume_chkpt=False):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -300,13 +300,24 @@ class Trainer:
         rotation_errors = []
         location_errors = []
 
+        if resume_chkpt:
+            mota_df = pd.read_excel('mota.xlsx')
+            start_idx = mota_df.last_valid_index()
+            mota_df = mota_df.iloc[: , 1:]
+
+
         for batch_idx, inputs in enumerate(self.infer_loader):
+
 
             if int(batch_idx + 1) % 100 == 0:
                 print('Sequence {} of {} Sequences'.format(int((batch_idx+1)/25), int(len(self.infer_loader)/25)))
 
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
+
+                # Skipping invalid images
+                if outputs is None:
+                    continue
 
                 if vis and int(batch_idx + 1) % 10 == 0:
                     dvis(torch.squeeze(inputs[2][3][0] > 0), fmt='voxels')
@@ -348,14 +359,30 @@ class Trainer:
                         print('Location error :', torch.median(torch.cat(location_errors, dim=0), dim=0).values * self.quantization_size)
                         continue
 
-                    assert len(occ_grids[seq_name]) == 25
+                    if len(occ_grids[seq_name]) != 25:
+                        print('skipping sequence !!!')
+                        continue
                     # Sort and rearrange df
                     collection_gt_eval_df.sort_values(by='seq_name')
                     collection_gt_eval_df.sort_values(by='scan_idx')
                     collection_eval_df.sort_values(by='seq_name')
                     collection_eval_df.sort_values(by='scan_idx')
                     sequences = collection_gt_eval_df['seq_name'].unique().tolist()
-                    assert len(sequences) == 1
+                    #assert len(sequences) == 1
+
+                    if int(batch_idx + 1) % 2500 == 0:
+                        # Create a Pandas Excel writer using XlsxWriter as the engine.
+                        writer = pd.ExcelWriter('mota_100.xlsx', engine='xlsxwriter')
+                        mota_df.to_excel(writer, sheet_name='mota')
+                        writer.save()
+
+                    if len(sequences) != 1:
+                        # Create a Pandas Excel writer using XlsxWriter as the engine.
+                        writer = pd.ExcelWriter('mota.xlsx', engine='xlsxwriter')
+                        mota_df.to_excel(writer, sheet_name='mota')
+                        writer.save()
+                        continue
+
                     for seq_idx, seq in enumerate(sequences):
                         gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
                         pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
@@ -665,6 +692,8 @@ class Trainer:
 
         # Unpack data
         dense_features, sparse_features, rpn_features = inputs
+        if dense_features is None:
+            return None, None
 
         rpn_gt = {}
         rpn_gt['breg_sparse'] = rpn_features[0]

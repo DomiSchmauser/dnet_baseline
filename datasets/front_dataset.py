@@ -19,13 +19,15 @@ from dvis import dvis
 
 class Front_dataset(Dataset):
 
-    def __init__(self, base_dir, split='train', overfit=False):
+    def __init__(self, base_dir, split='train', overfit=False, resume_chkpt=False):
 
         self.split = split
         self.data_dir = os.path.join(base_dir, self.split)
         self.scenes = [f for f in os.listdir(os.path.abspath(self.data_dir))]
+        if resume_chkpt and split == 'test':
+            self.scenes = self.scenes[319:]
         self.overfit = overfit
-        self.invalid_seq = ['80ed90e4-0110-4bf5-86ff-6c8fab0fdc90', '73492dd7-2106-4505-9348-4a52ebdfaf66_01', '73492dd7-2106-4505-9348-4a52ebdfaf66']
+        self.invalid_seq = ['075080a7-16fa-4a42-a267-401d5a957c0d', '80ed90e4-0110-4bf5-86ff-6c8fab0fdc90', '73492dd7-2106-4505-9348-4a52ebdfaf66_01', '73492dd7-2106-4505-9348-4a52ebdfaf66']
 
         self.imgs = []
         for scene in self.scenes:

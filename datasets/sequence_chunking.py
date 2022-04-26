@@ -320,6 +320,8 @@ def batch_collate_infer(batch):
         bscan_nocs_mask.append(nocs_mask.to(device)) # Move to cuda
         bscan_obj.append(obj_feats)
 
+    if not coords:
+        return None, None, (None, sparse_box_features, sparse_obj_features, bscan_inst_mask, bscan_nocs_mask, bscan_obj, bscan_info, bcam_info, bshift_info)
     # Batch sparse and dense features
     bcoords = ME.utils.batched_coordinates(coords)
     bfeats = torch.from_numpy(np.concatenate(feats, 0)).float()
