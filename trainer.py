@@ -45,6 +45,7 @@ from models.BNocDec2_ume import BNocDec2_ume
 
 # Tracking import
 from tracking.tracking_front import Tracker
+from utils.visualise import visualise_pred_sequence
 
 class Trainer:
 
@@ -278,7 +279,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=False, resume_chkpt=False):
+    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -311,6 +312,10 @@ class Trainer:
 
             if int(batch_idx + 1) % 100 == 0:
                 print('Sequence {} of {} Sequences'.format(int((batch_idx+1)/25), int(len(self.infer_loader)/25)))
+
+            if vis_pose and batch_idx == 0:
+                # Only single scene
+                vis_pc = inputs[2][-1][0]
 
             with torch.no_grad():
                 outputs, bscan_info = self.infer_step(inputs)
@@ -386,11 +391,21 @@ class Trainer:
                     for seq_idx, seq in enumerate(sequences):
                         gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
                         pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
+
+                        if vis_pose:
+                            pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories_vis(gt_seq_df, pred_seq_df, occ_grids[seq])
+                            visualise_pred_sequence(pred_trajectories, seq_name='Vis_Seq', pc=vis_pc)
+                            continue
+
+
                         pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
                         gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
                         pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
                         seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
                         mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
+
+
+
 
                     # Cleanup space
                     collection_eval_df = pd.DataFrame()

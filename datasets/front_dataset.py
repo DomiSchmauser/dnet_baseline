@@ -19,7 +19,7 @@ from dvis import dvis
 
 class Front_dataset(Dataset):
 
-    def __init__(self, base_dir, split='train', overfit=False, resume_chkpt=False):
+    def __init__(self, base_dir, split='train', overfit=False, resume_chkpt=False, with_pc=True):
 
         self.split = split
         self.data_dir = os.path.join(base_dir, self.split)
@@ -52,6 +52,7 @@ class Front_dataset(Dataset):
         self.quantization_size = 0.04
         self.debugging_mode = False
         self.cls_names = {1:'chair', 2:'table', 3:'sofa', 4:'bed', 5:'tv stand', 6:'wine cooler', 7:'nightstand'}
+        self.with_pc = with_pc
 
     def __len__(self):
         return len(self.imgs)
@@ -231,7 +232,10 @@ class Front_dataset(Dataset):
                 #dvis(record['obj_scan_mask'] > 0, fmt='voxels')
 
                 # Remove not used entries
-                del record['rgb'], record['pc_rgb'], record['depth_map']
+                if not self.with_pc:
+                    del record['rgb'], record['pc_rgb'], record['depth_map']
+                else:
+                    del record['rgb'], record['depth_map']
 
                 return record
 

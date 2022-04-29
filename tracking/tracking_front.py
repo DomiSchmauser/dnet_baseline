@@ -99,6 +99,90 @@ class Tracker:
 
         return pred_trajectories, gt_trajectories, seq_data
 
+    def analyse_trajectories_vis(self, gt_seq_df, pred_seq_df, occ_grids):
+        '''
+        Create trajectories based on match criterion, visualisation setup
+        '''
+
+        seq_data = dict()
+
+        pred_trajectories = []
+        gt_trajectories = []
+
+        for scan_idx in range(self.seq_len):
+
+            occ_grid = occ_grids[scan_idx]
+
+            gt_scan = gt_seq_df.loc[gt_seq_df['scan_idx'] == scan_idx]
+            pred_scan = pred_seq_df.loc[pred_seq_df['scan_idx'] == scan_idx]
+
+            gt_scan_dct = gt_scan.to_dict(orient='index')  # idxs, clmn
+            pred_scan_dct = pred_scan.to_dict(orient='index')
+
+            shift_free = list(gt_scan_dct.values())[0]['shift'] # world to normalizedworld
+            shift_coords = shift_free * (1 / self.quantization_size)
+            world2normworld = np.identity(4)
+            world2normworld[:3, 3] = shift_free # in original coords #todo check if correct
+
+            cam2world = list(gt_scan_dct.values())[0]['campose'] # Cam2world
+            cam_free2world_free = cam2world # Cam2world normed
+            normworld2cam = np.linalg.inv(cam2world)
+
+            scan2world = np.identity(4)
+            scan2world[:3, :3] = np.diag([self.quantization_size, self.quantization_size, self.quantization_size])
+            cam_grid2cam_free = normworld2cam @ world2normworld @ scan2world # Scan2cam
+
+            gt_target = []
+            for gt_t in list(gt_scan_dct.values()):
+                gt_target.append(gt_t['obj_idx'])
+
+            seq_data[scan_idx] = {'cam_free2world_free': cam_free2world_free, # cam2world
+                                  'cam_grid2cam_free': cam_grid2cam_free, # Scan2cam
+                                  'gt_target': gt_target}
+
+            # Initialize trajectory
+            if scan_idx == 0:
+                initial_gt_ids = []
+                for obj in pred_scan_dct.values():
+                    has_similar = False
+                    for pred_traj in pred_trajectories: #todo checks if any close object exists -> some kind of NMS
+                        if np.linalg.norm(pred_traj[0]['obj']['pred_aligned2scan'][:3, 3] - obj['pred_aligned2scan'][:3, 3]) < (self.similar_value / self.quantization_size): #todo check this
+                            has_similar = True
+                    if not has_similar: # not an object which is close #todo added check if gt id already in object -> maybe better
+                        if obj['gt_target'] not in initial_gt_ids:
+                            pred_trajectories.append([{'obj':obj, 'scan_idx':obj['scan_idx'], 'shift':shift_coords}])
+                            initial_gt_ids.append(obj['gt_target'])
+                        else:
+                            new_rpn_iou = obj['rpn_iou']
+                            for drop_idx, pred_obj in enumerate(pred_trajectories):
+                                if pred_obj[0]['obj']['gt_target'] == obj['gt_target']:
+                                    old_rpn_iou = pred_obj[0]['obj']['rpn_iou']
+                                    break
+                            if new_rpn_iou > old_rpn_iou:
+                                del pred_trajectories[drop_idx]
+                                pred_trajectories.append([{'obj': obj, 'scan_idx': obj['scan_idx'], 'shift': shift_coords}])
+
+
+                for gt_obj in gt_scan_dct.values():
+                    gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}])
+            else:
+                # Match trajectories to initial trajectory
+                pred_trajectories = self.pred_trajectory(pred_trajectories, pred_scan_dct, cam_grid2cam_free, occ_grid=occ_grid, traj_crit='with_first', shift=shift_coords, scan_idx=scan_idx)
+                # GT Matching
+                for gt_obj in gt_scan_dct.values():
+                    matched = False
+                    for gt_traj in gt_trajectories:
+                        if gt_obj['obj_idx'] == gt_traj[0]['obj']['obj_idx']:
+                            gt_traj.append({'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']})  # build list per trajectory
+                            matched = True
+                            break
+                    if not matched:
+                        gt_trajectories.append([{'obj': gt_obj, 'scan_idx': gt_obj['scan_idx']}]) # start new trajectory
+
+
+
+        return pred_trajectories, gt_trajectories, seq_data
+
     def pred_trajectory(self, trajectories, dscan_j, cam_grid2cam_free, occ_grid=None, traj_crit='with_first', shift=None, scan_idx=None):
 
         # assign proposals to trajectories based on traj_crit and match_criterion
