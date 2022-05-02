@@ -8,6 +8,7 @@ import open3d as o3d
 import trimesh
 import mcubes
 from sklearn.preprocessing import minmax_scale
+from utils.net_utils import vg_crop
 
 
 def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_box=True, as_mesh=True, pc=None, quant_size=0.04):
@@ -21,7 +22,6 @@ def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_
     tracklets = dict()
     fused_shapes, fused_scales = fuse_obj_shape(pred_trajectories)
 
-
     for scan_idx in range(seq_len):
         for color_idx, traj in enumerate(pred_trajectories):
 
@@ -29,7 +29,8 @@ def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_
                 world_pc = pc
 
             norm_obj_shape = fused_shapes[color_idx]
-            norm_obj_scale = fused_scales[color_idx] * quant_size
+
+            norm_obj_scale = fused_scales[color_idx]
 
             for frame in traj:
                 if frame['scan_idx'] == scan_idx:
@@ -40,13 +41,16 @@ def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_
                     scan2world[:3, :3] = np.diag([quant_size, quant_size, quant_size])
 
                     cad2world = scan2world @ cad2scan
+                    #bx = frame['obj']['bbox'].astype(float) * quant_size
+                    bx = norm_obj_scale.astype(float) * quant_size
+                    s_x, s_y, s_z = bx[3] - bx[0], bx[4] - bx[1], bx[5] - bx[2]
+                    obj_scale = np.array([s_x, s_y, s_z])
 
-                    cad2world = rescale_mat(cad2world, norm_obj_scale)
+                    cad2world = rescale_mat(cad2world, obj_scale)
                     world_pc_obj = grid2world(norm_obj_shape, cad2world, None, pred=True)
 
                     if as_mesh:
-                        #mesh = prednorm_vox2mesh(norm_obj_shape.numpy(), cad2world, box=frame['obj']['compl_box']) # idea use box to crop pc in cad space, box to cad, and scale pred mesh in cad
-                        mesh = vox2mesh(norm_obj_shape, box=None)
+                        mesh = vox2mesh(frame['obj']['occ'], box=None)
 
                         # Place at frame 0
                         if scan_idx == 0:  # todo if object is not in scan idx ==0 visible object is not placed maybe find all unique objects first
@@ -61,7 +65,7 @@ def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_
 
                     # Bounding box placement
                     if with_box:
-                        box = np.expand_dims(frame['obj']['bbox']*quant_size, axis=0)
+                        box = np.expand_dims(frame['obj']['bbox'].astype(float)*quant_size, axis=0)
                         dvis(box, fmt='box', s=3, c=color_idx+1, t=scan_idx+1, l=[0,3], name=f'box/box_{color_idx}')
 
                     # Obj pc center
@@ -215,16 +219,24 @@ def vox2mesh(vox, box=None):
     '''
     if type(vox) == torch.Tensor:
         vox = vox.numpy()
-    vertices, triangles = mcubes.marching_cubes(vox, 0)
-    # Verticies to CAD space before applying transform
+    vertices, triangles = mcubes.marching_cubes(vox, 0) # object space scan size
     dimensions = vox.shape
-    max_dim = max(dimensions[0], dimensions[1], dimensions[2])
-    vertices = vertices / max_dim - 0.5
+    #max_dim = max(dimensions[0], dimensions[1], dimensions[2]) - 1
+    max_dim = vertices.max(axis=0)
+    vertices = vertices / max_dim #- 0.5 # 0-centered
+    #shift_y = vertices.min(axis=0)[1]
+    #vertices[:,1] += shift_y # CAD space with scale 1
+    # R_NEGY90 = np.array([[0, 0, -1], [0, 1, 0], [1, 0, 0]])
+    R_X90 = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])
+    rot_obj2cad = np.linalg.inv(R_X90)  # object space to cad space
 
+    v_rot = rot_obj2cad @ vertices.transpose() + np.expand_dims(np.array([-0.5, 0, 0.5]), axis=-1)
+    vertices = v_rot.transpose()
     if box is not None:
         mesh = trimesh.Trimesh(vertices=vertices, faces=triangles, process=False)
     else:
         mesh = trimesh.Trimesh(vertices=vertices, faces=triangles)
+
 
     vertices = mesh.vertices
 
@@ -254,7 +266,9 @@ def fuse_obj_shape(pred_trajectories):
         for f_pred in traj:
             #dvis(f_pred['obj']['occ'], fmt='voxels')
             shape.append(f_pred['obj']['occ'].astype(int))
-            scale.append(get_scale(f_pred['obj']['pred_aligned2scan'][:3,:3])[0])
+            #print('Scale', get_scale(f_pred['obj']['pred_aligned2scan'][:3,:3]))
+            #scale.append(np.expand_dims(get_scale(f_pred['obj']['pred_aligned2scan'][:3,:3]), axis=0))
+            scale.append(np.expand_dims(f_pred['obj']['bbox'], axis=0))
 
             # Get max dims
             x, y, z = f_pred['obj']['occ'].shape[0], f_pred['obj']['occ'].shape[1], f_pred['obj']['occ'].shape[2]
@@ -273,12 +287,30 @@ def fuse_obj_shape(pred_trajectories):
 
         p_shapes = np.concatenate(padded_shapes, axis=0)
         shape = p_shapes.mean(axis=0)
+        f_scales = np.concatenate(scale, axis=0).mean(axis=0)
 
         # Binarize shape again
         shape[shape >= 0.5] = 1
         shape[shape < 0.5] = 0
         fused_shapes[traj_idx] = shape
-        fused_scales[traj_idx] = np.mean(np.array(scale))
+        fused_scales[traj_idx] = f_scales
+
+    return fused_shapes, fused_scales
+
+def fuse_obj_shape_gt(pred_trajectories, grid):
+    '''
+    fuse object shape by averaging over all predictions
+    fuse object scale by averaging over all predictions
+    '''
+
+    fused_shapes = [[] for i in range(len(pred_trajectories))]
+    fused_scales = [[] for i in range(len(pred_trajectories))]
+    for traj_idx, traj in enumerate(pred_trajectories):
+        for f_pred in traj:
+            vg_crop(grid, box)
+
+        fused_shapes[traj_idx] = shape
+        fused_scales[traj_idx] = f_scales
 
     return fused_shapes, fused_scales
 
@@ -288,7 +320,7 @@ def rescale_mat(cad2world, norm_scale):
     '''
     rot = cad2world[:3,:3]
     unscaled_rot = rot / get_scale(rot)
-    scaled_rot = np.diag(np.array([norm_scale, norm_scale, norm_scale])) @ unscaled_rot
+    scaled_rot = np.diag(norm_scale) @ unscaled_rot
     cad2world[:3, :3] = scaled_rot
     return cad2world
 

@@ -8,7 +8,7 @@ from utils.net_utils import vg_crop, get_scale
 class Tracker:
 
     def __init__(self):
-        self.seq_len = 25
+        self.seq_len = 125
         self.quantization_size = 0.04
         self.similar_value = 0.1
         self.iou_thres = 0.3

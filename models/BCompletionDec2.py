@@ -17,7 +17,7 @@ class BCompletionDec2(nn.Module):
         self.w  = conf['total_weight']
         self.crit = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([2]).cuda()).cuda()
 
-    def forward(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bbbox_lvl0: List):
+    def forward(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bbbox_lvl0: List, infer=False):
         bx_d0_crops = []
         for B in range(len(bbbox_lvl0)):
             bbox_lvl0 = bbbox_lvl0[B]
@@ -40,7 +40,10 @@ class BCompletionDec2(nn.Module):
                                         mode='trilinear', align_corners=True) for i in range(len(x_d0_batch_crops))]
             
             bx_d0_crops.append(x_d0_crops)
-        return bx_d0_crops
+        if not infer:
+            return bx_d0_crops
+        else:
+            return bx_d0_crops, x_d0_batch_crops
         
     
     def validation_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List):
@@ -54,8 +57,9 @@ class BCompletionDec2(nn.Module):
     def infer_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, bbbox_lvl0: List):
         if not all([len(bbox_lvl0)>0 for bbox_lvl0 in bbbox_lvl0]):
             return [[]]
-        bx_d0_crops = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0)
+        bx_d0_crops, norm_vox = self.forward(x_d2, x_e2, x_e1, bbbox_lvl0, infer=True)
         pred_compl = [[x_d0_crop > 0.0 for x_d0_crop in x_d0_crops] for x_d0_crops in bx_d0_crops]
+        pred_norm_compl = [vx > 0.0 for vx in norm_vox]
         return pred_compl
 
     def training_step(self, x_d2: torch.Tensor, x_e2: torch.Tensor, x_e1: torch.Tensor, rpn_gt, bbbox_lvl0: List, bgt_target: List):

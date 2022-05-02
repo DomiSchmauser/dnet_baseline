@@ -279,7 +279,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True):
+    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=125):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -358,13 +358,13 @@ class Trainer:
                             occ_grids[seq_name][scan_idx] = grid
 
                 # Evaluate Tracking per Sequence for fixed sequence lenght == 25
-                if int(batch_idx + 1) % 25 == 0:
+                if int(batch_idx + 1) % seq_len == 0:
                     if pose_only:
                         print('Rotation error :', torch.median(torch.cat(rotation_errors, dim=0), dim=0).values)
                         print('Location error :', torch.median(torch.cat(location_errors, dim=0), dim=0).values * self.quantization_size)
                         continue
 
-                    if len(occ_grids[seq_name]) != 25:
+                    if len(occ_grids[seq_name]) != seq_len:
                         print('skipping sequence !!!')
                         continue
                     # Sort and rearrange df
@@ -394,7 +394,8 @@ class Trainer:
 
                         if vis_pose:
                             pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories_vis(gt_seq_df, pred_seq_df, occ_grids[seq])
-                            visualise_pred_sequence(pred_trajectories, seq_name='Vis_Seq', pc=vis_pc)
+                            #visualise_gt_sequence(gt_trajectories, seq_name='Vis_Seq', pc=vis_pc, grid=occ_grids[seq_name])
+                            visualise_pred_sequence(pred_trajectories, seq_name='Vis_Seq', pc=vis_pc, seq_len=seq_len)
                             continue
 
 
@@ -404,16 +405,13 @@ class Trainer:
                         seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
                         mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
 
-
-
-
                     # Cleanup space
                     collection_eval_df = pd.DataFrame()
                     collection_gt_eval_df = pd.DataFrame()
                     occ_grids = dict()
 
                 # Logging
-                if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only:
+                if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only and not vis_pose:
                     mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
                     Prec = mota_df.loc[:, 'precision'].mean(axis=0) #How many of found are correct
                     Rec = mota_df.loc[:, 'recall'].mean(axis=0) #How many predictions found
