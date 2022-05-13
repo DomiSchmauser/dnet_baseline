@@ -279,7 +279,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=100, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=125):
+    def inference(self, store_results=False, vis=False, mota_log_freq=50, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=25, classwise=True):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -296,6 +296,12 @@ class Trainer:
         collection_eval_df = pd.DataFrame()
         collection_gt_eval_df = pd.DataFrame()
         mota_df = pd.DataFrame()
+        classes_df = {
+            0: pd.DataFrame(), 1: pd.DataFrame(), 2: pd.DataFrame(),
+            3: pd.DataFrame(), 4: pd.DataFrame(),
+            5: pd.DataFrame(), 6: pd.DataFrame()
+        }
+
         occ_grids = dict()
 
         rotation_errors = []
@@ -405,6 +411,16 @@ class Trainer:
                         seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
                         mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
 
+                        if classwise:
+                            # Just run eval MOTA on all classes dfs and aggregate seperately
+                            for cls, cls_df in classes_df.items():
+                                gt_cls_traj_tables = gt_traj_tables[gt_traj_tables['obj_cls'] == cls]
+                                if gt_cls_traj_tables.empty:
+                                    continue
+                                pred_cls_traj_tables = pred_traj_tables[pred_traj_tables['obj_cls'] == cls]
+                                class_mota_summary = self.Tracker.eval_mota(pred_cls_traj_tables, gt_cls_traj_tables)
+                                classes_df[cls] = pd.concat([cls_df, class_mota_summary], axis=0, ignore_index=True)
+
                     # Cleanup space
                     collection_eval_df = pd.DataFrame()
                     collection_gt_eval_df = pd.DataFrame()
@@ -426,6 +442,23 @@ class Trainer:
                           ' Current sum Misses:', num_misses,
                           ' Current sum False Positives:', num_false_positives)
 
+                    # Logging
+                    if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only and not vis_pose and classwise:
+                        cls_mapping = {
+                            1: 'chair', 2: 'table', 3: 'sofa',
+                            4: 'bed', 5: 'tv_stand',
+                            6: 'cooler', 7: 'night_stand'
+                        }
+                        if classwise:
+                            for cls, cls_df in classes_df.items():
+                                if cls_df.empty:
+                                    continue
+                                cls_mota_accumulated = get_mota(cls_df.loc[:, 'num_objects'].sum(axis=0),
+                                                                   cls_df.loc[:, 'num_misses'].sum(axis=0),
+                                                                   cls_df.loc[:, 'num_false_positives'].sum(axis=0),
+                                                                   cls_df.loc[:, 'num_switches'].sum(axis=0))
+                                print('Class MOTA :', cls_mapping[cls], 'score:', cls_mota_accumulated)
+
         # Final Logging
         print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
@@ -441,6 +474,21 @@ class Trainer:
               ' Recall:', Rec,
               ' Current sum Misses:', num_misses,
               ' Current sum False Positives:', num_false_positives)
+
+        cls_mapping = {
+            1: 'chair', 2: 'table', 3: 'sofa',
+            4: 'bed', 5: 'tv_stand',
+            6: 'cooler', 7: 'night_stand'
+        }
+        if classwise:
+            for cls, cls_df in classes_df.items():
+                if cls_df.empty:
+                    continue
+                cls_mota_accumulated = get_mota(cls_df.loc[:, 'num_objects'].sum(axis=0),
+                                                cls_df.loc[:, 'num_misses'].sum(axis=0),
+                                                cls_df.loc[:, 'num_false_positives'].sum(axis=0),
+                                                cls_df.loc[:, 'num_switches'].sum(axis=0))
+                print('Class MOTA :', cls_mapping[cls], 'score:', cls_mota_accumulated)
 
         # Results to CSV
         if store_results:

@@ -14,4 +14,4 @@ opts = options.parse()
 
 if __name__ == "__main__":
     trainer = Trainer(opts)
-    trainer.inference(vis_pose=True)
+    trainer.inference(vis_pose=False)

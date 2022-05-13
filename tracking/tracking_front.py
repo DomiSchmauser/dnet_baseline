@@ -8,7 +8,7 @@ from utils.net_utils import vg_crop, get_scale
 class Tracker:
 
     def __init__(self):
-        self.seq_len = 125
+        self.seq_len = 25
         self.quantization_size = 0.04
         self.similar_value = 0.1
         self.iou_thres = 0.3
@@ -298,6 +298,7 @@ class Tracker:
                                               world_y=world_t[1],
                                               world_z=world_t[2],
                                               obj_idx=traj[k]['obj']['obj_idx'] if 'obj_idx' in traj[k]['obj'] else None,
+                                              obj_cls=traj[k]['obj']['class_id'] if 'class_id' in traj[k]['obj'] else None,
                                               ref_obj_idx=traj[k]['ref_obj_idx'] if 'ref_obj_idx' in traj[k] else None,
                                               gt_obj_idx=[np.array(seq_data[scan_idx]['gt_target'])] if seq_data[scan_idx][
                                                                                                         'gt_target'] is not None else None, # ISSUE CAN HOLD ONLY ONE ID
@@ -313,6 +314,8 @@ class Tracker:
                                               world_y=world_t[1],
                                               world_z=world_t[2],
                                               obj_idx=traj[k]['obj']['gt_target'] if 'gt_target' in traj[k][
+                                                  'obj'] else None,
+                                              obj_cls=traj[k]['obj']['class_id'] if 'class_id' in traj[k][
                                                   'obj'] else None,
                                               ref_obj_idx=traj[k]['ref_obj_idx'] if 'ref_obj_idx' in traj[k] else None,
                                               gt_obj_idx=[np.array(seq_data[scan_idx]['gt_target'])] if

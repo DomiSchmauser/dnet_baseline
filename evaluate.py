@@ -113,6 +113,7 @@ def evaluate_bdscan(outputs, inputs, losses=None, analyses=None):
             info_df['bbox'] = [outputs['rpn']['bbbox_lvl0'][B][j].detach().cpu().numpy()]
 
             info_df['class_name'] = [dobject['class_name']]
+            info_df['class_id'] = [dobject['category_id']]
 
             pred_df = pd.concat([pred_df, info_df], axis=1)#, keys=['','info'])
 

@@ -11,7 +11,7 @@ from sklearn.preprocessing import minmax_scale
 from utils.net_utils import vg_crop
 
 
-def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_box=True, as_mesh=True, pc=None, quant_size=0.04):
+def visualise_pred_sequence(pred_trajectories, seq_name=None, seq_len=125, with_box=False, as_mesh=True, pc=None, quant_size=0.04):
     '''
     Visualise Tracking via object idx, scan as pointcloud for background, objects as voxel grids
     Added smoothing:
