@@ -279,7 +279,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=50, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=25, classwise=True):
+    def inference(self, store_results=False, vis=False, mota_log_freq=25, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=25, classwise=True):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -408,7 +408,7 @@ class Trainer:
                         pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories(gt_seq_df, pred_seq_df, occ_grids[seq])
                         gt_traj_tables = self.Tracker.get_traj_tables(gt_trajectories, seq_data, 'gt')
                         pred_traj_tables = self.Tracker.get_traj_tables(pred_trajectories, seq_data, 'pred')
-                        seq_mota_summary = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
+                        seq_mota_summary, mot_events = self.Tracker.eval_mota(pred_traj_tables, gt_traj_tables)
                         mota_df = pd.concat([mota_df, seq_mota_summary], axis=0, ignore_index=True)
 
                         if classwise:
@@ -417,8 +417,18 @@ class Trainer:
                                 gt_cls_traj_tables = gt_traj_tables[gt_traj_tables['obj_cls'] == cls]
                                 if gt_cls_traj_tables.empty:
                                     continue
+
+                                # Get assignments
+                                matches = mot_events[mot_events['Type'] == 'MATCH']
+                                class_ids = gt_cls_traj_tables['obj_idx'].unique()
+                                filtered_matched = matches[matches['HId'].isin(class_ids)]  # all mate
+                                frame_idxs = filtered_matched.index.droplevel(1)
+                                obj_idxs = filtered_matched['HId']
+                                fp_cls_traj_tables = pred_traj_tables.loc[pred_traj_tables['scan_idx'].isin(frame_idxs) & pred_traj_tables['obj_idx'].isin(obj_idxs)]
                                 pred_cls_traj_tables = pred_traj_tables[pred_traj_tables['obj_cls'] == cls]
-                                class_mota_summary = self.Tracker.eval_mota(pred_cls_traj_tables, gt_cls_traj_tables)
+                                pred_merge_table = pd.concat([fp_cls_traj_tables, pred_cls_traj_tables]).drop_duplicates()
+                                pred_merge_table['gt_obj_idx'] = pred_merge_table['gt_obj_idx'].apply(np.array)
+                                class_mota_summary, _ = self.Tracker.eval_mota(pred_merge_table, gt_cls_traj_tables)
                                 classes_df[cls] = pd.concat([cls_df, class_mota_summary], axis=0, ignore_index=True)
 
                     # Cleanup space
@@ -439,11 +449,12 @@ class Trainer:
                     print('Accumulated MOTA:', mota_accumulated, ' Averaged MOTA:', mota_score,
                           ' Precision:', Prec,
                           ' Recall:', Rec,
+                          'ID switches:', id_switches,
                           ' Current sum Misses:', num_misses,
                           ' Current sum False Positives:', num_false_positives)
 
                     # Logging
-                    if int(batch_idx + 1) % mota_log_freq == 0 and not pose_only and not vis_pose and classwise:
+                    if int(batch_idx + 1) % mota_log_freq*2 == 0 and not pose_only and not vis_pose and classwise:
                         cls_mapping = {
                             1: 'chair', 2: 'table', 3: 'sofa',
                             4: 'bed', 5: 'tv_stand',
@@ -472,6 +483,7 @@ class Trainer:
         print('Accumulated MOTA:', mota_accumulated, ' Averaged MOTA:', mota_score,
               ' Precision:', Prec,
               ' Recall:', Rec,
+              'ID switches:', id_switches,
               ' Current sum Misses:', num_misses,
               ' Current sum False Positives:', num_false_positives)
 

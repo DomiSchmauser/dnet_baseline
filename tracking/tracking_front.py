@@ -318,7 +318,7 @@ class Tracker:
                                               obj_cls=traj[k]['obj']['class_id'] if 'class_id' in traj[k][
                                                   'obj'] else None,
                                               ref_obj_idx=traj[k]['ref_obj_idx'] if 'ref_obj_idx' in traj[k] else None,
-                                              gt_obj_idx=[np.array(seq_data[scan_idx]['gt_target'])] if
+                                              gt_obj_idx=[tuple(np.array(seq_data[scan_idx]['gt_target']).tolist())] if
                                               seq_data[scan_idx][
                                                   'gt_target'] is not None else None,  # ISSUE CAN HOLD ONLY ONE ID
                                               ), index=[scan_idx]
@@ -370,7 +370,7 @@ class Tracker:
         all_traj_summary = mh.compute(acc, metrics=['num_frames', 'mota', 'precision', 'recall', 'num_objects', 'num_matches', 'num_misses',
                                            'num_false_positives', 'num_switches'], name='acc')
 
-        return all_traj_summary
+        return all_traj_summary, acc.mot_events
 
     def voxelize_unit_pc(self, pc, shape=20):
         indices = (np.clip(pc, 0, 0.9999) * shape).astype(int)
