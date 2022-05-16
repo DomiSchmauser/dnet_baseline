@@ -279,7 +279,7 @@ class Trainer:
 
         self.set_train()
 
-    def inference(self, store_results=False, vis=False, mota_log_freq=25, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=25, classwise=True):
+    def inference(self, store_results=False, vis=False, mota_log_freq=250, get_pose_error=False, pose_only=False, resume_chkpt=False, vis_pose=True, seq_len=25, classwise=True):
         """
         Run the entire inference pipeline and perform tracking afterwards
         mota_log_freq/ 25 = num_sequences per logging
@@ -297,10 +297,17 @@ class Trainer:
         collection_gt_eval_df = pd.DataFrame()
         mota_df = pd.DataFrame()
         classes_df = {
-            0: pd.DataFrame(), 1: pd.DataFrame(), 2: pd.DataFrame(),
-            3: pd.DataFrame(), 4: pd.DataFrame(),
-            5: pd.DataFrame(), 6: pd.DataFrame()
+            1: pd.DataFrame(), 2: pd.DataFrame(), 3: pd.DataFrame(),
+            4: pd.DataFrame(), 5: pd.DataFrame(),
+            6: pd.DataFrame(), 7: pd.DataFrame()
         }
+        classes_iou = {
+            1: [], 2: [], 3: [],
+            4: [], 5: [],
+            6: [], 7: []
+        }
+
+        overall_iou = []
 
         occ_grids = dict()
 
@@ -387,6 +394,11 @@ class Trainer:
                         mota_df.to_excel(writer, sheet_name='mota')
                         writer.save()
 
+                        for cls, cls_df in classes_df.items():
+                            writer = pd.ExcelWriter('mota_'+str(cls)+'.xlsx', engine='xlsxwriter')
+                            cls_df.to_excel(writer, sheet_name='mota')
+                            writer.save()
+
                     if len(sequences) != 1:
                         # Create a Pandas Excel writer using XlsxWriter as the engine.
                         writer = pd.ExcelWriter('mota.xlsx', engine='xlsxwriter')
@@ -397,6 +409,26 @@ class Trainer:
                     for seq_idx, seq in enumerate(sequences):
                         gt_seq_df = collection_gt_eval_df.loc[collection_gt_eval_df['seq_name'] == seq]
                         pred_seq_df = collection_eval_df.loc[collection_eval_df['seq_name'] == seq]
+
+                        #todo Get 3D IoU Classwise and overall
+                        iou_all = pred_seq_df['compl_iou'].to_numpy()
+                        iou_all[iou_all != np.array(None)]
+                        nan_array = np.isnan(iou_all)
+                        not_nan_array = ~ nan_array
+                        iou_all = iou_all[not_nan_array]
+                        iou_all_mean = iou_all.mean()
+                        overall_iou.append(iou_all_mean)
+                        for iou_cls, cls_list in classes_iou.items():
+                            iou_cls_tables = pred_seq_df[pred_seq_df['class_id'] == iou_cls]
+                            if iou_cls_tables.empty:
+                                continue
+                            iou_cls_val = iou_cls_tables['compl_iou'].to_numpy()
+                            iou_cls_val[iou_cls_val != np.array(None)]
+                            nan_array = np.isnan(iou_cls_val)
+                            not_nan_array = ~ nan_array
+                            iou_cls_val = iou_cls_val[not_nan_array]
+                            iou_cls_val = iou_cls_val.mean()
+                            cls_list.append(iou_cls_val)
 
                         if vis_pose:
                             pred_trajectories, gt_trajectories, seq_data = self.Tracker.analyse_trajectories_vis(gt_seq_df, pred_seq_df, occ_grids[seq])
@@ -470,6 +502,13 @@ class Trainer:
                                                                    cls_df.loc[:, 'num_switches'].sum(axis=0))
                                 print('Class MOTA :', cls_mapping[cls], 'score:', cls_mota_accumulated)
 
+                            for cls, cls_list in classes_iou.items():
+                                if not cls_list:
+                                    continue
+                                cls_iou_score = np.array(cls_list).mean()
+                                print('Class IoU :', cls_mapping[cls], 'score:', cls_iou_score)
+
+                            print('Overall IoU', np.array(overall_iou).mean())
         # Final Logging
         print('Final tracking scores :')
         mota_score = mota_df.loc[:, 'mota'].mean(axis=0)
@@ -501,6 +540,14 @@ class Trainer:
                                                 cls_df.loc[:, 'num_false_positives'].sum(axis=0),
                                                 cls_df.loc[:, 'num_switches'].sum(axis=0))
                 print('Class MOTA :', cls_mapping[cls], 'score:', cls_mota_accumulated)
+
+            for cls, cls_list in classes_iou.items():
+                if not cls_list:
+                    continue
+                cls_iou_score = np.array(cls_list).mean()
+                print('Class IoU :', cls_mapping[cls], 'score:', cls_iou_score)
+
+            print('Overall IoU', np.array(overall_iou).mean())
 
         # Results to CSV
         if store_results:
